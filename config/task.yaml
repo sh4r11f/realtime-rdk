@@ -1,0 +1,5 @@
+fixation_tolerance: 3.5  # dva
+saccade_tolerance: 5  # dva
+fixation_hold: 200  # ms
+fixation_blink_period: 300  # ms
+saccade_duration: 100  # ms
