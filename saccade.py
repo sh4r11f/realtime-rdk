@@ -56,6 +56,10 @@ from math import fabs, hypot
 import nidaqmx
 from nidaqmx.constants import VoltageUnits
 
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
 # Switch to the script folder
 root = Path().cwd()
 if root.is_dir():
@@ -216,7 +220,7 @@ el_tracker.sendCommand("button_function 5 'accept_target_fixation'")
 # Open a window, be sure to specify monitor parameters
 screen_num = 1
 
-mon = monitors.Monitor('myMonitor', width=52.0, distance=42.0)
+mon = monitors.Monitor('myMonitor', width=54.0, distance=43.0)
 mon.setSizePix((1920, 1080))
 win = visual.Window(fullscr=full_screen,
                     screen=screen_num,
@@ -300,6 +304,58 @@ if use_retina:
 pylink.openGraphicsEx(genv)
 
 # define a few helper functions for trial handling
+plt.ion()  # interactive mode on
+
+_plot_fig = None
+_plot_axes = None
+
+def update_plots(history):
+    """Update a persistent non-blocking figure with recent trial history."""
+    global _plot_fig, _plot_axes
+    if len(history) == 0:
+        return
+
+    df = pd.DataFrame(history)
+
+    # create figure once or recreate if closed
+    if _plot_fig is None or not plt.fignum_exists(_plot_fig.number):
+        _plot_fig, _plot_axes = plt.subplots(3, 1, figsize=(10, 12))
+        try:
+            _plot_fig.canvas.manager.set_window_title('Trial Summary')
+        except Exception:
+            pass  # backend may not support setting window title
+
+    axs = _plot_axes
+    # clear axes and redraw
+    for ax in axs:
+        ax.clear()
+
+    # Correct/Incorrect count (use trial_index for x but keep readable)
+    sns.countplot(x='trial_index', hue='correct', data=df, palette={0: "red", 1: "green"}, ax=axs[0])
+    axs[0].set_title(f"Correct/Incorrect Trials (Last {len(df)} Trials)")
+    axs[0].set_xlabel("Trial Index")
+    axs[0].set_ylabel("Count")
+    axs[0].legend(title="Correct", loc="upper right", labels=["No", "Yes"])
+
+    # Percent correct (single bar)
+    percent_correct = 100 * df['correct'].mean()
+    sns.barplot(x=['Percent Correct'], y=[percent_correct], ax=axs[1])
+    axs[1].set_title("Percent Correct")
+    axs[1].set_ylabel("Percent")
+
+    # Total reward
+    total_reward = sum(0.3 for t in history if t['correct'] == 1)
+    sns.barplot(x=['Total Reward'], y=[total_reward], ax=axs[2])
+    axs[2].set_title("Total Reward")
+    axs[2].set_ylabel("Reward (ml)")
+
+    plt.tight_layout()
+    # draw and allow GUI event loop to process without blocking
+    try:
+        _plot_fig.canvas.draw_idle()
+    except Exception:
+        _plot_fig.canvas.draw()
+    plt.pause(0.001)
 
 
 def clear_screen(win):
@@ -425,7 +481,7 @@ def read_config(file_path):
     return config
 
 
-def terminate_task():
+def terminate_task(history):
     """ Terminate the task gracefully and retrieve the EDF data file
 
     file_to_retrieve: The EDF on the Host that we would like to download
@@ -465,6 +521,10 @@ def terminate_task():
         # Close the link to the tracker.
         el_tracker.close()
 
+    # save data
+    # Save trial history to a file
+    df = pd.DataFrame(history)
+    df.to_csv(data_dir / 'trial_history.csv', index=False)
 
     # close the PsychoPy window
     win.close()
@@ -593,7 +653,7 @@ def acquire_fixation(el_tracker, timeout_s=3.0, hold_time_s=0.05, blink_interval
     return False
 
 
-def run_trial(cond, trial_index, stim_params, task_params):
+def run_trial(cond, trial_index, stim_params, task_params, history):
     """Run a single RDK trial.
 
     cond - one of 'go', 'no-go', or 'noise'
@@ -768,7 +828,7 @@ def run_trial(cond, trial_index, stim_params, task_params):
             # Ctrl-C to terminate experiment (existing behavior)
             if keycode == 'c' and (modifier['ctrl'] is True):
                 el_tracker.sendMessage('terminated_by_user')
-                terminate_task()
+                terminate_task(history)
                 return 0
             # Pause the experiment mid-trial and return control to the outer loop
             if keycode == 'p':
@@ -879,14 +939,14 @@ def run_trial(cond, trial_index, stim_params, task_params):
     rdk_y = pos_jitter
     rdk = visual.DotStim(
         win,
-        nDots=25,
-        dotSize=rdk_dotSize,
-        speed=2,
-        dotLife=40,
+        nDots=stim_params["RDK"]["n_dots"],
+        dotSize=deg2pix(stim_params["RDK"]["dot_size"], mon),
+        speed=deg2pix(stim_params["RDK"]["speed"], mon),
+        dotLife=stim_params["RDK"]["dot_life"],
         dir=direction,
         coherence=coherence,
         fieldPos=(rdk_x, rdk_y),
-        fieldSize=200,
+        fieldSize=deg2pix(stim_params["RDK"]["field_size"], mon),
         fieldShape='circle',
         signalDots='same',
         noiseDots="walk"
@@ -897,8 +957,8 @@ def run_trial(cond, trial_index, stim_params, task_params):
     tar_onset_time = el_tracker.trackerTime()
 
     # define hit region (circle centered on RDK)
-    # sac_tol_px = deg2pix(task_params["saccade_tolerance"], mon)
-    sac_tol_px = 200
+    sac_tol_px = deg2pix(stim_params["RDK"]["field_size"], mon)
+    sac_tol_px = 400
     hit_region = (int(scn_width/2.0 + rdk_x - sac_tol_px),
                   int(scn_height/2.0 - rdk_y - sac_tol_px),
                   int(scn_width/2.0 + rdk_x + sac_tol_px),
@@ -922,6 +982,8 @@ def run_trial(cond, trial_index, stim_params, task_params):
     fix_dur = 0.1
     sac_timer = None
     sac_dur = task_params["saccade_duration"] / 1000.0
+    sac_start = None
+    rt = 0
 
     event.clearEvents()
     start_time = time.time()
@@ -951,7 +1013,7 @@ def run_trial(cond, trial_index, stim_params, task_params):
             # Ctrl-C to terminate experiment (existing behavior)
             if keycode == 'c' and (modifier['ctrl'] is True):
                 el_tracker.sendMessage('terminated_by_user')
-                terminate_task()
+                terminate_task(history)
                 return 0
             # Pause the experiment mid-trial and return control to the outer loop
             if keycode == 'p':
@@ -1026,14 +1088,13 @@ def run_trial(cond, trial_index, stim_params, task_params):
                 if (dfx * dfx + dfy * dfy) >= (fix_tol_px * fix_tol_px):
                     if sac_timer is None:
                         sac_timer = time.time()
-                    if time.time() - sac_timer >= sac_dur:
-                        print(f"Eyes outside the window at {time.time() - sac_timer}")
-                        # Check inside target
-                        dx = gaze_center_x
-                        dy = gaze_center_y
-                        if (dx * dx + dy * dy) <= (sac_tol_px * sac_tol_px):
-                            acc = 1
-                            got_sac = True
+                    # Check inside target
+                    dx = gaze_center_x
+                    dy = gaze_center_y
+                    if (dx * dx + dy * dy) <= (sac_tol_px * sac_tol_px) and (time.time() - sac_timer < sac_dur):
+                        acc = 1
+                        got_sac = True
+                        rt = time.time() - sac_timer
                     else:
                         acc = 0
                         got_sac = False
@@ -1041,6 +1102,7 @@ def run_trial(cond, trial_index, stim_params, task_params):
                 dx = gx - scn_width/2.0
                 dy = gy - scn_height/2.0
                 if (dx * dx + dy * dy) >= (fix_tol_px * fix_tol_px):
+                    rt = time.time()
                     acc = 0
                     got_sac = True
                 # if hold_start is None:
@@ -1051,8 +1113,15 @@ def run_trial(cond, trial_index, stim_params, task_params):
                 #     break
 
         eye_ev = el_tracker.getNextData()
-        if eye_ev == pylink.ENDSACC:
-            print(eye_ev)
+        if eye_ev in [pylink.STARTSACC, pylink.ENDSACC, pylink.STARTFIX, pylink.ENDFIX]:
+            if eye_ev == pylink.STARTSACC:
+                print(f"Eye event: pylink.STARTSACC")
+            elif eye_ev == pylink.ENDSACC:
+                print(f"Eye event: pylink.ENDSACC")
+            elif eye_ev == pylink.STARTFIX:
+                print(f"Eye event: pylink.STARTFIX")
+            elif eye_ev == pylink.ENDFIX:
+                print(f"Eye event: pylink.ENDFIX")
         # if (eye_ev is not None) and (eye_ev == pylink.ENDSACC):
         #     # if eye_ev is not None:
         #     eye_dat = el_tracker.getFloatData()
@@ -1117,7 +1186,7 @@ def run_trial(cond, trial_index, stim_params, task_params):
     # send a 'TRIAL_RESULT' message to mark the end of trial
     el_tracker.sendMessage('TRIAL_RESULT %d' % pylink.TRIAL_OK)
 
-    return acc
+    return acc, rt
 
 
 # Step 5: Run trials continuously, allowing pause and on-the-fly selection
@@ -1175,6 +1244,10 @@ def pause_menu(el_tracker):
 
 
 # initial selection for the running mode
+stim_params = read_config(config_dir / 'stimuli.yaml')
+task_params = read_config(config_dir / 'task.yaml')
+trial_history = []
+
 intro_text = (
     "Select initial trial type:\n\n"
     "g: GO (saccade to upward-moving dots)\n"
@@ -1192,13 +1265,13 @@ while current_mode is None:
         continue
     k = keys[0]
     if k == 'escape':
-        terminate_task()
+        terminate_task(trial_history)
     if k in valid_keys:
         current_mode = valid_keys[k]
 
 if dummy_mode:
     print('ERROR: This task requires real-time gaze data.\nIt cannot run in Dummy mode.')
-    terminate_task()
+    terminate_task(trial_history)
 
 # run initial calibration before starting (same behavior as before)
 try:
@@ -1210,22 +1283,23 @@ except RuntimeError as err:
     except Exception:
         pass
 
-stim_params = read_config(config_dir / 'stimuli.yaml')
-task_params = read_config(config_dir / 'task.yaml')
-trial_history = []
 
 # run trials continuously until we reach total_trials or the experimenter quits
 while trial_index <= total_trials:
     # allow immediate termination between trials
     # run the trial with the current_mode; run_trial may return None to indicate
     # it was aborted (e.g., due to pause), 0/1 for accuracy, or pylink.TRIAL_ERROR
-    acc = run_trial(current_mode, trial_index, stim_params, task_params)
+    res = run_trial(current_mode, trial_index, stim_params, task_params, trial_history)
+    if isinstance(res, tuple):
+        acc, rt = res
+    else:
+        acc, rt = res, -1
 
     # if the trial was aborted (None), show pause menu to pick next mode
     if acc is None:
         choice = pause_menu(el_tracker)
         if choice is None:
-            terminate_task()
+            terminate_task(trial_history)
         current_mode = choice
         # do not increment trial_index, re-run the same trial index with the new mode
         continue
@@ -1240,16 +1314,26 @@ while trial_index <= total_trials:
     trial_history.append({
         'trial_index': trial_index,
         'mode': current_mode,
-        'correct': acc
+        'correct': acc,
+        'ReactionTime': rt
     })
 
-    print(f"Mode: {current_mode}, correct: {acc}, accuracy: {sum(1 for t in trial_history if t['correct'] == 1)}/{len(trial_history)}")
+    n_trials = len(trial_history)
+    n_correct = sum(1 for t in trial_history if t['correct'] == 1)
+    percent_correct = 100 * n_correct / n_trials if n_trials > 0 else 0
+    # find how many correct trials in a row
+    n_correct_in_a_row = 0
+    for t in reversed(trial_history):
+        if t['correct'] == 1:
+            n_correct_in_a_row += 1
+        else:
+            break
+    print(f"Mode: {current_mode}, reaction time: {np.round(rt, 4) * 1000}, correct: {acc}, accuracy: {percent_correct:.2f}%, consecutive correct: {n_correct_in_a_row}, total correct trials: {n_correct}")
+    # if n_trials % 5 == 0:
+    #     update_plots(trial_history)
+
     trial_index += 1
     core.wait(0.5)
 
 # Step 6: disconnect, download the EDF file, then terminate the task
-terminate_task()
-
-# Save trial history to a file
-df = pd.DataFrame(trial_history)
-df.to_csv(data_dir / 'trial_history.csv', index=False)
+terminate_task(trial_history)

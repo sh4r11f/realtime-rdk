@@ -1,11 +1,14 @@
 RDK:
-  eccentricity: 15
-  dot_size: 0.5
+  eccentricity: 22
+  dot_size: 0.7
   width: 10
   density: 0.001
-  speed: 0.8
-  duration: 0.5  # ms
+  speed: 0.18
+  duration: 0.5  # s
   position_jitter: 3
+  n_dots: 40
+  field_size: 20  # dva
+  dot_life: 80
   side: left
 # ---------------------------------------
 Fixation:
