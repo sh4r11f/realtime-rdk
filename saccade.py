@@ -92,7 +92,7 @@ NUM_BLOCKS = 3
 # Store the parameters of all trials in a list, here we block the
 # anti- and pro-saccade trials
 # [cond, tar_pos, correct_sac_tar_pos]
-block_types = ['go', 'no-go', 'noise']
+block_types = ['go', 'no-go', 'noise', 'noise+go']
 
 # use a dictionary to label target position (left vs. right)
 tar_pos = (-350, 0)
@@ -130,6 +130,8 @@ root = Path().cwd()
 today = date.today().strftime("%Y_%m_%d")
 data_dir = root / 'data' / today / f"sub-{sub_id}" / f"ses-{ses_id:02d}"
 data_dir.mkdir(exist_ok=True, parents=True)
+fig_dir = root / 'figures' / today / f"sub-{sub_id}" / f"ses-{ses_id:02d}"
+fig_dir.mkdir(exist_ok=True, parents=True)
 local_edf = str(data_dir / f"sub-{sub_id}_ses-{ses_id}_rdk_{today}.edf")
 
 # Step 1: Connect to the EyeLink Host PC
@@ -286,7 +288,7 @@ genv.setPictureTarget(calib_images)
 
 # Configure the size of the calibration target (in pixels)
 # this option applies only to "circle" and "spiral" targets
-genv.setTargetSize(100)
+genv.setTargetSize(60)
 
 # Beeps to play during calibration, validation and drift correction
 # parameters: target, good, error
@@ -309,6 +311,7 @@ plt.ion()  # interactive mode on
 _plot_fig = None
 _plot_axes = None
 
+
 def update_plots(history):
     """Update a persistent non-blocking figure with recent trial history."""
     global _plot_fig, _plot_axes
@@ -319,7 +322,7 @@ def update_plots(history):
 
     # create figure once or recreate if closed
     if _plot_fig is None or not plt.fignum_exists(_plot_fig.number):
-        _plot_fig, _plot_axes = plt.subplots(3, 1, figsize=(10, 12))
+        _plot_fig, _plot_axes = plt.subplots(2, 3, figsize=(24, 12))
         try:
             _plot_fig.canvas.manager.set_window_title('Trial Summary')
         except Exception:
@@ -327,27 +330,97 @@ def update_plots(history):
 
     axs = _plot_axes
     # clear axes and redraw
-    for ax in axs:
-        ax.clear()
+    for row in axs:
+        for ax in row:
+            ax.clear()
 
-    # Correct/Incorrect count (use trial_index for x but keep readable)
-    sns.countplot(x='trial_index', hue='correct', data=df, palette={0: "red", 1: "green"}, ax=axs[0])
-    axs[0].set_title(f"Correct/Incorrect Trials (Last {len(df)} Trials)")
-    axs[0].set_xlabel("Trial Index")
-    axs[0].set_ylabel("Count")
-    axs[0].legend(title="Correct", loc="upper right", labels=["No", "Yes"])
+    # Session title
+    _plot_fig.suptitle(f"Subject: {sub_id}, Session: {ses_id}, Date: {date}", fontsize=16)
 
-    # Percent correct (single bar)
-    percent_correct = 100 * df['correct'].mean()
-    sns.barplot(x=['Percent Correct'], y=[percent_correct], ax=axs[1])
-    axs[1].set_title("Percent Correct")
-    axs[1].set_ylabel("Percent")
+    # Correct/Incorrect count (use trial_index for x but keep readable by showing only last N trials)
+    last_n_trials = 20
+    sns.countplot(x='trial_index', hue='correct', data=df.tail(last_n_trials), palette={0: "red", 1: "green"}, ax=axs[0, 0])
+    axs[0, 0].set_title(f"Correct/Incorrect Trials (Last {last_n_trials} Trials)")
+    axs[0, 0].set_xlabel("Trial Index")
+    axs[0, 0].set_ylabel("Count")
+    axs[0, 0].legend(title="Correct", loc="upper right", labels=["No", "Yes"])
 
-    # Total reward
-    total_reward = sum(0.3 for t in history if t['correct'] == 1)
-    sns.barplot(x=['Total Reward'], y=[total_reward], ax=axs[2])
-    axs[2].set_title("Total Reward")
-    axs[2].set_ylabel("Reward (ml)")
+    # Correct/incorrect trial by trial
+    cor_df = df.groupby(['trial_index', 'mode'])['correct'].mean().reset_index()
+    total_correct = cor_df['correct'].sum()
+    sns.lineplot(x='trial_index', y='correct', hue='mode', data=cor_df, ax=axs[0, 1])
+    axs[0, 1].set_ylim(0, 1)
+    axs[0, 1].set_title(f"Trial History (Total Correct: {total_correct}/{df.shape[0]})")
+    axs[0, 1].set_ylabel("Correct/Incorrect")
+
+    # Percent correct overall (lineplot with percent correct based on trial mode as a function of trial index)
+    # keep original df for other panels, filter into pct_df for the line plot
+    # Calculate percent correct so far based on mode
+    df['percent_correct'] = (
+        df.groupby('mode')['correct']
+        .cumsum() / df.groupby('mode').cumcount().add(1) * 100
+    )
+    sns.lineplot(x='trial_index', y='percent_correct', hue='mode', data=df, ax=axs[0, 2])
+    axs[0, 2].set_title("Correct")
+    axs[0, 2].set_ylabel("Percent")
+    axs[0, 2].set_ylim(0, 100)
+
+    # Total reward (cumulative reward assuming 0.3 ml per correct trial)
+    df["reward"] = df["correct"] * 0.3
+    sns.barplot(x=['Total Reward'], y=[df["reward"].sum()], ax=axs[1, 0])
+    axs[1, 0].set_title("Total Reward")
+    axs[1, 0].set_ylabel("Reward (ml)")
+
+    # Reaction time (saccade latency) distribution
+    # keep original df for other panels, filter into rt_df for the histogram
+    rt_df = df[df["reaction_time"] > 0]  # filter out invalid latencies
+    if rt_df.shape[0] == 0:
+        axs[1, 1].text(0.5, 0.5, "No valid reaction times", ha='center', va='center')
+        axs[1, 1].set_title("Saccade Latency Distribution")
+        axs[1, 1].set_xlabel("Saccade Latency (ms)")
+        axs[1, 1].set_ylabel("Count")
+    else:
+        # seaborn's KDE requires multiple observations; try KDE and fall back to no KDE on failure
+        try:
+            sns.histplot(data=rt_df, x='reaction_time', hue='mode', bins=20, kde=True, ax=axs[1, 1])
+        except ValueError:
+            sns.histplot(data=rt_df, x='reaction_time', hue='mode', bins=20, kde=False, ax=axs[1, 1])
+    axs[1, 1].set_title("Saccade Latency Distribution")
+    axs[1, 1].set_xlabel("Saccade Latency (ms)")
+    axs[1, 1].set_ylabel("Count")
+    # Only show legend if there are labeled artists (avoids UserWarning)
+    handles, labels = axs[1, 1].get_legend_handles_labels()
+    if labels:
+        axs[1, 1].legend(title="Mode")
+
+    # Accuracy on block transitions
+    df["prev_mode"] = df["mode"].shift(1)
+    # find percent correct on each type of mode switch (e.g., go->no-go, no-go->go, etc.)
+    mode_switches = df[df["prev_mode"] != df["mode"]]
+    mode_switch_accuracy = mode_switches.groupby(["prev_mode", "mode"])["correct"].mean().reset_index()
+    print("Mode Switch Accuracy:")
+    print(mode_switch_accuracy)
+    if mode_switch_accuracy.shape[0] == 0:
+        axs[1, 2].text(0.5, 0.5, "No mode switches yet", ha='center', va='center')
+        axs[1, 2].set_title("Mode Switch Accuracy")
+        axs[1, 2].set_xlabel("Mode Switch")
+        axs[1, 2].set_ylabel("Proportion Correct")
+    else:
+        mode_switch_accuracy["mode_switch"] = mode_switch_accuracy["prev_mode"] + "→" + mode_switch_accuracy["mode"]
+        sns.barplot(x='mode_switch', y='correct', data=mode_switch_accuracy, ax=axs[1, 2])
+        axs[1, 2].set_title("Mode Switch Accuracy")
+        axs[1, 2].set_xlabel("Mode Switch")
+        axs[1, 2].set_ylabel("Proportion Correct")
+        axs[1, 2].set_ylim(0, 1)
+        for p in axs[1, 2].patches:
+            height = p.get_height()
+            axs[1, 2].annotate(f'{height:.2f}',
+                               (p.get_x() + p.get_width() / 2., height),
+                               ha='center', va='bottom')
+            axs[1, 2].set_ylim(0, 1)
+            axs[1, 2].set_xlim(-0.5, len(mode_switch_accuracy) - 0.5)
+            axs[1, 2].set_xticklabels(mode_switch_accuracy["mode_switch"], rotation=45)
+            axs[1, 2].margins(x=0.01)
 
     plt.tight_layout()
     # draw and allow GUI event loop to process without blocking
@@ -405,8 +478,10 @@ def give_reward(reward_voltage=5.0, duration_ms=200, pulses=2, inter_pulse_ms=20
     off_samples = int(round(inter_pulse_ms * sample_rate / 1000.0))
 
     # build one pulse (on then off) and tile it
-    single = np.concatenate([np.ones(on_samples) * float(reward_voltage),
-                                np.zeros(off_samples)])
+    single = np.concatenate([
+        np.ones(on_samples) * float(reward_voltage),
+        np.zeros(off_samples)
+    ])
     signal = np.tile(single, pulses)
 
     # fallback: ensure signal not empty
@@ -524,7 +599,37 @@ def terminate_task(history):
     # save data
     # Save trial history to a file
     df = pd.DataFrame(history)
-    df.to_csv(data_dir / 'trial_history.csv', index=False)
+    # df.to_csv(data_dir / 'trial_history.csv', index=False)
+    try:
+        # prefer pandas writer
+        df.to_csv(data_dir / 'trial_history.csv', index=False)
+    except Exception as e:
+        # fallback: write CSV with stdlib to avoid pandas import internals
+        import csv
+        out_path = data_dir / 'trial_history_fallback.csv'
+        try:
+            with open(out_path, 'w', newline='', encoding='utf-8') as fh:
+                if len(df.columns) == 0:
+                    fh.write('')  # empty frame
+                else:
+                    writer = csv.writer(fh)
+                    writer.writerow(df.columns)
+                    for row in df.itertuples(index=False, name=None):
+                        writer.writerow(row)
+            print(f"Warning: pandas.to_csv failed ({e}); wrote fallback CSV: {out_path}")
+        except Exception as e2:
+            print(f"Error: failed to save trial history with fallback method: {e2}")
+
+    # save final plot if it exists
+    try:
+        if _plot_fig is not None and plt.fignum_exists(_plot_fig.number):
+            out_png = fig_dir / 'trial_summary.png'
+            out_pdf = fig_dir / 'trial_summary.pdf'
+            _plot_fig.savefig(str(out_png), bbox_inches='tight', dpi=150)
+            _plot_fig.savefig(str(out_pdf), bbox_inches='tight', dpi=150)
+            print(f"Saved plots: {out_png}, {out_pdf}")
+    except Exception as e:
+        print("Warning: failed to save plot:", e)
 
     # close the PsychoPy window
     win.close()
@@ -575,7 +680,7 @@ def acquire_fixation(el_tracker, timeout_s=3.0, hold_time_s=0.05, blink_interval
     hold_start = None
 
     # PsychoPy mouse fallback for simulation/dummy
-    mouse = event.Mouse(win=win, visible=True)
+    mouse = event.Mouse(win=win, visible=False)
 
     while (time.time() - start_t) < timeout_s:
         now = time.time()
@@ -792,7 +897,7 @@ def run_trial(cond, trial_index, stim_params, task_params, history):
     hold_time_s = task_params["fixation_hold"] / 1000.0
     start_t = time.time()
     hold_start = None
-    mouse = event.Mouse(win=win, visible=True)
+    mouse = event.Mouse(win=win, visible=False)
     fix_acquired = False
     fix_on = True
     blink_period = task_params["fixation_blink_period"] / 1000.0
@@ -918,15 +1023,31 @@ def run_trial(cond, trial_index, stim_params, task_params, history):
 
     # show the RDK depending on condition
     # build DotStim: direction in degrees (90 = up, 270 = down)
+    # For 'noise+go' start as noise (coherence=0) and optionally change to go at a
+    # random time between 0.5-1.0s. The whole trial length is fixed to 1.0s.
     if cond == 'go':
         coherence = 1.0
         direction = 90
+        change_time = None
+        trial_length = rdk_dur
     elif cond == 'no-go':
         coherence = 1.0
         direction = 270
+        change_time = None
+        trial_length = rdk_dur
+    elif cond == 'noise+go':
+        # override trial length to 1.0s
+        trial_length = 1
+        # schedule a coherence change uniformly between 0.2 and 1.0 s
+        change_time = np.random.uniform(0.2, 1)
+        # start as noise
+        coherence = 0.0
+        direction = 0
     else:  # 'noise'
         coherence = 0.0
         direction = 0
+        change_time = None
+        trial_length = rdk_dur
 
     # Jitter location while keeping the eccentricity the same
     # side = np.random.choice([0, 1])
@@ -940,7 +1061,7 @@ def run_trial(cond, trial_index, stim_params, task_params, history):
     rdk = visual.DotStim(
         win,
         nDots=stim_params["RDK"]["n_dots"],
-        dotSize=deg2pix(stim_params["RDK"]["dot_size"], mon),
+        dotSize=rdk_dotSize,
         speed=deg2pix(stim_params["RDK"]["speed"], mon),
         dotLife=stim_params["RDK"]["dot_life"],
         dir=direction,
@@ -949,7 +1070,7 @@ def run_trial(cond, trial_index, stim_params, task_params, history):
         fieldSize=deg2pix(stim_params["RDK"]["field_size"], mon),
         fieldShape='circle',
         signalDots='same',
-        noiseDots="walk"
+        noiseDots="direction"
     )
 
     # send a message to log the onset of the stimulus
@@ -958,7 +1079,7 @@ def run_trial(cond, trial_index, stim_params, task_params, history):
 
     # define hit region (circle centered on RDK)
     sac_tol_px = deg2pix(stim_params["RDK"]["field_size"], mon)
-    sac_tol_px = 400
+    sac_tol_px = 270
     hit_region = (int(scn_width/2.0 + rdk_x - sac_tol_px),
                   int(scn_height/2.0 - rdk_y - sac_tol_px),
                   int(scn_width/2.0 + rdk_x + sac_tol_px),
@@ -982,18 +1103,52 @@ def run_trial(cond, trial_index, stim_params, task_params, history):
     fix_dur = 0.1
     sac_timer = None
     sac_dur = task_params["saccade_duration"] / 1000.0
-    sac_start = None
-    rt = 0
+    # sac_start not used; reserved for future extensions
+    rt = -1
+    onset = False
 
     event.clearEvents()
     start_time = time.time()
-    while time.time() - start_time < rdk_dur and not got_sac:
+    # loop until trial_length elapsed (may be overridden for noise+go)
+    while time.time() - start_time < trial_length and not got_sac:
         # draw fixation + RDK
         fix_cross.draw()
         rdk.draw()
         win.flip()
+        if not onset:
+            stim_onset = time.time()
+            onset = True
         if time.time() - start_time < fix_dur:
             continue
+
+        # If this is a 'noise+go' trial, check whether we've reached the change time
+        if cond == 'noise+go' and (change_time is not None):
+            elapsed = time.time() - start_time
+            if elapsed >= change_time and coherence == 0.0:
+                # flip to go: set coherence and upward motion
+                coherence = 1.0
+                direction = 90
+                # update the DotStim parameters in-place if supported, otherwise recreate
+                try:
+                    rdk.coherence = coherence
+                    rdk.dir = direction
+                except Exception:
+                    # recreate DotStim with new parameters
+                    rdk = visual.DotStim(
+                        win,
+                        nDots=stim_params["RDK"]["n_dots"],
+                        dotSize=deg2pix(stim_params["RDK"]["dot_size"], mon),
+                        speed=deg2pix(stim_params["RDK"]["speed"], mon),
+                        dotLife=stim_params["RDK"]["dot_life"],
+                        dir=direction,
+                        coherence=coherence,
+                        fieldPos=(rdk_x, rdk_y),
+                        fieldSize=deg2pix(stim_params["RDK"]["field_size"], mon),
+                        fieldShape='circle',
+                        signalDots='same',
+                        noiseDots="walk"
+                    )
+                el_tracker.sendMessage(f'coherence_change {int(elapsed*1000)}')
 
         # abort the current trial if the tracker is no longer recording
         error = el_tracker.isRecording()
@@ -1052,7 +1207,7 @@ def run_trial(cond, trial_index, stim_params, task_params, history):
         # sac_tol_px = 100
         cx = scn_width/2.0 + rdk_x
         cy = scn_height/2.0 - rdk_y
-        sac_hold = 10
+    # sac_hold unused in current logic
         try:
             sample = el_tracker.getNewestSample()
         except Exception:
@@ -1080,48 +1235,71 @@ def run_trial(cond, trial_index, stim_params, task_params, history):
             gaze_center_x = gaze_center_y = None
 
         if (gaze_center_x is not None) and (gaze_center_y is not None):
+            # compute outside-fixation boolean
+            dfx = gx - scn_width / 2.0
+            dfy = gy - scn_height / 2.0
+            outside_fix = (dfx * dfx + dfy * dfy) >= (fix_tol_px * fix_tol_px)
 
-            if cond == "go":
-                # Check outside fixation
-                dfx = gx - scn_width / 2.0
-                dfy = gy - scn_height / 2.0
-                if (dfx * dfx + dfy * dfy) >= (fix_tol_px * fix_tol_px):
+            # 'go' trials: saccade to stimulus -> correct when inside hit region
+            if cond == 'go':
+                if outside_fix:
                     if sac_timer is None:
                         sac_timer = time.time()
-                    # Check inside target
                     dx = gaze_center_x
                     dy = gaze_center_y
                     if (dx * dx + dy * dy) <= (sac_tol_px * sac_tol_px) and (time.time() - sac_timer < sac_dur):
                         acc = 1
                         got_sac = True
-                        rt = time.time() - sac_timer
+                        rt = time.time() - stim_onset
                     else:
                         acc = 0
                         got_sac = False
+
+            # 'noise+go' trials: must hold fixation during initial noise; any saccade before
+            # the scheduled change_time is incorrect. After change_time a saccade to target
+            # is evaluated as in 'go'.
+            elif cond == 'noise+go':
+                elapsed = time.time() - start_time
+                if outside_fix:
+                    # saccade before change -> incorrect (if change_time hasn't occurred yet)
+                    if (change_time is None) or (elapsed < change_time):
+                        if sac_timer is None:
+                            sac_timer = time.time()
+                        acc = 0
+                        got_sac = True
+                        rt = time.time() - stim_onset
+                    else:
+                        # after change: accept saccades to target
+                        if sac_timer is None:
+                            sac_timer = time.time()
+                        dx = gaze_center_x
+                        dy = gaze_center_y
+                        if (dx * dx + dy * dy) <= (sac_tol_px * sac_tol_px) and (time.time() - sac_timer < sac_dur):
+                            acc = 1
+                        else:
+                            acc = 0
+                        got_sac = True
+                        rt = time.time() - stim_onset
+
+            # 'no-go' and 'noise' trials: any saccade during stimulus = incorrect
             else:
-                dx = gx - scn_width/2.0
-                dy = gy - scn_height/2.0
-                if (dx * dx + dy * dy) >= (fix_tol_px * fix_tol_px):
-                    rt = time.time()
+                if outside_fix:
+                    if sac_timer is None:
+                        sac_timer = time.time()
                     acc = 0
                     got_sac = True
-                # if hold_start is None:
-                #     hold_start = time.time()
-                # elif (time.time() - hold_start) >= sac_hold:
-                #     acc = 1
-                #     got_sac = True
-                #     break
+                    rt = time.time() - stim_onset
 
         eye_ev = el_tracker.getNextData()
         if eye_ev in [pylink.STARTSACC, pylink.ENDSACC, pylink.STARTFIX, pylink.ENDFIX]:
             if eye_ev == pylink.STARTSACC:
-                print(f"Eye event: pylink.STARTSACC")
+                print("Eye event: pylink.STARTSACC")
             elif eye_ev == pylink.ENDSACC:
-                print(f"Eye event: pylink.ENDSACC")
-            elif eye_ev == pylink.STARTFIX:
-                print(f"Eye event: pylink.STARTFIX")
-            elif eye_ev == pylink.ENDFIX:
-                print(f"Eye event: pylink.ENDFIX")
+                print("Eye event: pylink.ENDSACC")
+            # elif eye_ev == pylink.STARTFIX:
+            #     print(f"Eye event: pylink.STARTFIX")
+            # elif eye_ev == pylink.ENDFIX:
+            #     print(f"Eye event: pylink.ENDFIX")
         # if (eye_ev is not None) and (eye_ev == pylink.ENDSACC):
         #     # if eye_ev is not None:
         #     eye_dat = el_tracker.getFloatData()
@@ -1190,9 +1368,9 @@ def run_trial(cond, trial_index, stim_params, task_params, history):
 
 
 # Step 5: Run trials continuously, allowing pause and on-the-fly selection
-available_blocks = ['go', 'no-go', 'noise']
+available_blocks = ['go', 'no-go', 'noise', 'noise+go']
 trial_index = 1
-total_trials = 1000
+total_trials = 10000
 
 
 def pause_menu(el_tracker):
@@ -1206,6 +1384,7 @@ def pause_menu(el_tracker):
         "g: GO\n"
         "n: NO-GO\n"
         "s: NOISE\n"
+        "u: NOISE+GO\n"
         "c: Calibrate tracker now\n"
         "q: Quit experiment\n\n"
         "Press the corresponding key to continue."
@@ -1213,7 +1392,7 @@ def pause_menu(el_tracker):
 
     show_msg(win, menu_text, wait_for_keypress=False)
 
-    valid_keys = {'g': 'go', 'n': 'no-go', 's': 'noise', 'q': 'quit', 'c': 'calib'}
+    valid_keys = {'g': 'go', 'n': 'no-go', 's': 'noise', 'u': 'noise+go', 'q': 'quit', 'c': 'calib'}
 
     while True:
         keys = event.waitKeys(keyList=list(valid_keys.keys()) + ['escape'])
@@ -1252,12 +1431,13 @@ intro_text = (
     "Select initial trial type:\n\n"
     "g: GO (saccade to upward-moving dots)\n"
     "n: NO-GO (maintain fixation for downward-moving dots)\n"
-    "s: NOISE (maintain fixation for noise dots)\n\n"
+    "s: NOISE (maintain fixation for noise dots)\n"
+    "u: NOISE+GO (start as noise; coherence may change 0.5-1s -> then saccade)\n\n"
     "During the experiment press 'p' to pause and choose upcoming trial types,\n"
     "press 'c' to calibrate at any time, or 'escape' to quit."
 )
 show_msg(win, intro_text, wait_for_keypress=False)
-valid_keys = {'g': 'go', 'n': 'no-go', 's': 'noise'}
+valid_keys = {'g': 'go', 'n': 'no-go', 's': 'noise', 'u': 'noise+go'}
 current_mode = None
 while current_mode is None:
     keys = event.waitKeys(keyList=list(valid_keys.keys()) + ['escape'])
@@ -1285,6 +1465,7 @@ except RuntimeError as err:
 
 
 # run trials continuously until we reach total_trials or the experimenter quits
+n_correct_in_a_row = 0
 while trial_index <= total_trials:
     # allow immediate termination between trials
     # run the trial with the current_mode; run_trial may return None to indicate
@@ -1308,32 +1489,43 @@ while trial_index <= total_trials:
     if acc == 1:
         give_reward()
         el_tracker.sendMessage('reward_given')
+        n_correct_in_a_row += 1
     else:
         el_tracker.sendMessage('no_reward')
+        n_correct_in_a_row = 0
+
+    # Change mode automatically if 5 correct in a row
+    switch_modes = ['go', 'noise']
+    if n_correct_in_a_row == 5 and current_mode in switch_modes:
+        n_correct_in_a_row = 0
+        current_mode = [m for m in switch_modes if m != current_mode][0]
+        print(f"Switching to new mode: {current_mode}")
 
     trial_history.append({
         'trial_index': trial_index,
         'mode': current_mode,
         'correct': acc,
-        'ReactionTime': rt
+        'reaction_time': np.round(rt * 1000, 3) if rt > 0 else -1
     })
 
     n_trials = len(trial_history)
     n_correct = sum(1 for t in trial_history if t['correct'] == 1)
     percent_correct = 100 * n_correct / n_trials if n_trials > 0 else 0
     # find how many correct trials in a row
-    n_correct_in_a_row = 0
+    n_correct_in_a_row_total = 0
     for t in reversed(trial_history):
         if t['correct'] == 1:
-            n_correct_in_a_row += 1
+            n_correct_in_a_row_total += 1
         else:
             break
-    print(f"Mode: {current_mode}, reaction time: {np.round(rt, 4) * 1000}, correct: {acc}, accuracy: {percent_correct:.2f}%, consecutive correct: {n_correct_in_a_row}, total correct trials: {n_correct}")
+    # compact status message (split to avoid overly long line)
+    print(f"Mode: {current_mode}, RT: {np.round(rt * 1000, 3)}, rewarded: {acc}")
+    print(f"Consecutive correct: {n_correct_in_a_row_total}, Total correct: {n_correct}, Percent: {percent_correct:.2f}%")
     # if n_trials % 5 == 0:
-    #     update_plots(trial_history)
+    update_plots(trial_history)
 
     trial_index += 1
-    core.wait(0.5)
+    core.wait(1)
 
 # Step 6: disconnect, download the EDF file, then terminate the task
 terminate_task(trial_history)
