@@ -288,7 +288,7 @@ genv.setPictureTarget(calib_images)
 
 # Configure the size of the calibration target (in pixels)
 # this option applies only to "circle" and "spiral" targets
-genv.setTargetSize(60)
+genv.setTargetSize(100)
 
 # Beeps to play during calibration, validation and drift correction
 # parameters: target, good, error
@@ -335,7 +335,7 @@ def update_plots(history):
             ax.clear()
 
     # Session title
-    _plot_fig.suptitle(f"Subject: {sub_id}, Session: {ses_id}, Date: {date}", fontsize=16)
+    _plot_fig.suptitle(f"Subject: {sub_id}, Session: {ses_id}, Date: {date.today().fromisoformat()}", fontsize=16)
 
     # Correct/Incorrect count (use trial_index for x but keep readable by showing only last N trials)
     last_n_trials = 20
@@ -364,9 +364,10 @@ def update_plots(history):
     axs[0, 2].set_title("Correct")
     axs[0, 2].set_ylabel("Percent")
     axs[0, 2].set_ylim(0, 100)
+    axs[0, 2].axhline(50, ls='--', color='gray')  # chance performance line
 
     # Total reward (cumulative reward assuming 0.3 ml per correct trial)
-    df["reward"] = df["correct"] * 0.3
+    df["reward"] = df["correct"] * 0.25
     sns.barplot(x=['Total Reward'], y=[df["reward"].sum()], ax=axs[1, 0])
     axs[1, 0].set_title("Total Reward")
     axs[1, 0].set_ylabel("Reward (ml)")
@@ -395,19 +396,19 @@ def update_plots(history):
 
     # Accuracy on block transitions
     df["prev_mode"] = df["mode"].shift(1)
-    # find percent correct on each type of mode switch (e.g., go->no-go, no-go->go, etc.)
-    mode_switches = df[df["prev_mode"] != df["mode"]]
-    mode_switch_accuracy = mode_switches.groupby(["prev_mode", "mode"])["correct"].mean().reset_index()
-    print("Mode Switch Accuracy:")
-    print(mode_switch_accuracy)
-    if mode_switch_accuracy.shape[0] == 0:
+    df["switch"] = df["prev_mode"] != df["mode"]
+    if df["switch"].sum() == 0:
         axs[1, 2].text(0.5, 0.5, "No mode switches yet", ha='center', va='center')
         axs[1, 2].set_title("Mode Switch Accuracy")
         axs[1, 2].set_xlabel("Mode Switch")
         axs[1, 2].set_ylabel("Proportion Correct")
     else:
-        mode_switch_accuracy["mode_switch"] = mode_switch_accuracy["prev_mode"] + "→" + mode_switch_accuracy["mode"]
-        sns.barplot(x='mode_switch', y='correct', data=mode_switch_accuracy, ax=axs[1, 2])
+        df["mode_switch"] = df["prev_mode"] + "→" + df["mode"]
+        # find percent correct on each type of mode switch (e.g., go->no-go, no-go->go, etc.)
+        grouped = df.groupby(["prev_mode", "mode"])["correct"].mean().reset_index()
+        grouped.rename(columns={"correct": "ans"}, inplace=True)
+        df = df.merge(grouped, on=["prev_mode", "mode"], how="left")
+        sns.barplot(x='mode_switch', y='ans', data=df, ax=axs[1, 2])
         axs[1, 2].set_title("Mode Switch Accuracy")
         axs[1, 2].set_xlabel("Mode Switch")
         axs[1, 2].set_ylabel("Proportion Correct")
@@ -415,11 +416,11 @@ def update_plots(history):
         for p in axs[1, 2].patches:
             height = p.get_height()
             axs[1, 2].annotate(f'{height:.2f}',
-                               (p.get_x() + p.get_width() / 2., height),
-                               ha='center', va='bottom')
+                            (p.get_x() + p.get_width() / 2., height),
+                            ha='center', va='bottom')
             axs[1, 2].set_ylim(0, 1)
-            axs[1, 2].set_xlim(-0.5, len(mode_switch_accuracy) - 0.5)
-            axs[1, 2].set_xticklabels(mode_switch_accuracy["mode_switch"], rotation=45)
+            axs[1, 2].set_xlim(-0.5, len(grouped) - 0.5)
+            axs[1, 2].set_xticklabels(df["mode_switch"], rotation=45)
             axs[1, 2].margins(x=0.01)
 
     plt.tight_layout()
