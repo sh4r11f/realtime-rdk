@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../../.conda/envs/psyc/Lib/site-packages/pylink"
+		},
+		{
+			"path": "../../tools/psychopy"
+		}
+	],
+	"settings": {
+		"powershell.cwd": "realtime-rdk"
+	}
+}
