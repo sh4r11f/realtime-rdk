@@ -8,9 +8,9 @@ saccade_tolerance: 3  # dva
 saccade_initiation_duration: 500  # ms
 saccade_duration: 100  # ms
 max_rdk_duration: 800  # ms
-rdk_speeds: [15, 25]  # dva/s
-coherence_levels: [0.33, 1]  # proportion
-inter_trial_interval: 300  # ms
+rdk_speeds: [25]  # dva/s
+coherence_levels: [0.16, 0.32, 0.64, 1]  # proportion
+inter_trial_interval: 100  # ms
 reward_amount: 0.25  # ml
 directions: [90, 270]  # degrees (90=up, 270=down)
 n_trials_per_condition: 20

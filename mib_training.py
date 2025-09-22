@@ -252,7 +252,7 @@ genv.setPictureTarget(calib_images)
 
 # Configure the size of the calibration target (in pixels)
 # this option applies only to "circle" and "spiral" targets
-genv.setTargetSize(100)
+genv.setTargetSize(50)
 
 # Beeps to play during calibration, validation and drift correction
 # parameters: target, good, error
@@ -292,6 +292,9 @@ def update_plots(history):
     df["saccade_x_dva"] = df["saccade_x"].apply(lambda x: pix2deg(x, monitor=mon))
     df["stim_x_dva"] = df["stim_x"].apply(lambda x: pix2deg(x, monitor=mon))
     df["stim_y_dva"] = df["stim_y"].apply(lambda y: pix2deg(y, monitor=mon))
+    # get rid of extreme outliers in reaction time
+    # df = df[df["saccade_rt"] < abs(df["saccade_rt"].mean() + 3 * df["saccade_rt"].std())]
+    df = df[(df["saccade_rt"] < 500) & (df["saccade_rt"] > 50)]
 
     # create figure once or recreate if closed
     if _plot_fig is None or not plt.fignum_exists(_plot_fig.number):
@@ -330,7 +333,10 @@ def update_plots(history):
         .cumsum() / df["correct"].count() * 100
     )
     sns.lineplot(x='trial_index', y='percent_correct', data=df, ax=axs[0, 1])
-    axs[0, 1].set_title(f"Total correct {df['correct'].sum()} / {df['correct'].count()} trials | Total reward {df['correct'].sum() * 0.25:.2f} ml")
+    axs[0, 1].set_title(
+        f"Total correct {df['correct'].sum()} / {df['correct'].count()} trials"
+        f" | Total reward {df['correct'].sum() * 0.25:.2f} ml"
+    )
     axs[0, 1].set_xlabel("Trial")
     axs[0, 1].set_ylabel("Percent correct")
     axs[0, 1].set_ylim(0, 100)
@@ -352,7 +358,7 @@ def update_plots(history):
             data=tmp,
             x='coherence',
             y='signed_y',
-            hue='speed_dva_per_sec',
+            # hue='speed_dva_per_sec',
             estimator=np.mean,
             errorbar='se',
             palette='muted',
@@ -386,7 +392,8 @@ def update_plots(history):
         axs[1, 0].legend(title="Direction", loc="upper right")
 
     # Saccade landing position scatter
-    land_df = df[(df["correct"] == 1) & (df["coherence"] == 1)].copy()
+    # land_df = df[(df["correct"] == 1) & (df["coherence"] == 1)].copy()
+    land_df = df[(df["correct"] == 1)].copy()
     # ensure the column exists if history was created differently
     if "direction_name" not in land_df.columns and "direction" in land_df.columns:
         land_df["direction_name"] = land_df["direction"].map({90: 'Up', 270: 'Down'})
@@ -440,8 +447,20 @@ def update_plots(history):
         axs[1, 2].set_ylabel("Count")
     else:
         # compute saccade angle in degrees (0-360, 0=right, 90=up, 180=left, 270=down)
-        land_df['saccade_angle'] = (np.degrees(np.arctan2(-land_df['saccade_y_dva'], land_df['saccade_x_dva'])) + 360) % 360
-        sns.histplot(data=land_df, x='saccade_angle', hue='direction_name', bins=20, kde=False, ax=axs[1, 2], palette="Set1")
+        land_df['saccade_angle'] = (
+            np.degrees(
+                np.arctan2(-land_df['saccade_y_dva'], land_df['saccade_x_dva'])
+            ) + 360
+        ) % 360
+        sns.histplot(
+            data=land_df,
+            x='saccade_angle',
+            hue='direction_name',
+            bins=20,
+            kde=False,
+            ax=axs[1, 2],
+            palette="Set1"
+        )
         axs[1, 2].set_title("MIB Distribution")
         axs[1, 2].set_xlabel("Saccade Angle (degrees)")
         axs[1, 2].set_ylabel("Count")
@@ -463,9 +482,25 @@ def update_plots(history):
     else:
         # seaborn's KDE requires multiple observations; try KDE and fall back to no KDE on failure
         try:
-            sns.histplot(data=rt_df, x='saccade_rt', hue='speed_dva_per_sec', bins=20, kde=True, ax=axs[2, 0], palette="RdYlBu")
+            sns.histplot(
+                data=rt_df,
+                x='saccade_rt',
+                hue='coherence',
+                bins=20,
+                kde=True,
+                ax=axs[2, 0],
+                palette="RdYlBu"
+            )
         except ValueError:
-            sns.histplot(data=rt_df, x='saccade_rt', hue='speed_dva_per_sec', bins=20, kde=False, ax=axs[2, 0], palette="RdYlBu")
+            sns.histplot(
+                data=rt_df,
+                x='saccade_rt',
+                hue='coherence',
+                bins=20,
+                kde=False,
+                ax=axs[2, 0],
+                palette="RdYlBu"
+            )
     axs[2, 0].set_title("Saccade RT Distribution")
     axs[2, 0].set_xlabel("RT (ms)")
     axs[2, 0].set_ylabel("Count")
@@ -475,8 +510,12 @@ def update_plots(history):
         axs[2, 0].legend(title="Speed", loc="upper right")
 
     # Plot saccade angle as a function of latency for correct trials with 100% coherence
-    angle_df = df[(df["correct"] == 1) & (df["coherence"] == 1) & (df["saccade_rt"] > 0)].copy()
-    angle_df['saccade_angle'] = (np.degrees(np.arctan2(-angle_df['saccade_y_dva'], angle_df['saccade_x_dva'])) + 360) % 360
+    angle_df = df[(df["correct"] == 1)].copy()
+    angle_df['saccade_angle'] = (
+        np.degrees(
+            np.arctan2(-angle_df['saccade_y_dva'], angle_df['saccade_x_dva'])
+        ) + 360
+    ) % 360
     if angle_df.shape[0] == 0:
         axs[2, 1].text(0.5, 0.5, "No valid saccades", ha='center', va='center')
         axs[2, 1].set_title("Saccade Angle vs. Latency")
@@ -499,6 +538,78 @@ def update_plots(history):
         else:
             if axs[2, 1].legend_ is not None:
                 axs[2, 1].legend_.remove()
+
+    # Fit a Weibull function to MIB differences by coherence
+    mib_df = df[(df["correct"] == 1) & (df["saccade_y"].notna())].copy()
+    # get rid of outlier reaction times
+    # mib_df = mib_df["saccade_rt"] < (mib_df["saccade_rt"].mean() + 3 * mib_df["saccade_rt"].std())
+    # get difference of saccade y by direction
+    mib_df['saccade_y_signed'] = np.where(mib_df['direction'] == 90, mib_df['saccade_y_dva'], -mib_df['saccade_y_dva'])
+    psycho_df = mib_df.groupby('coherence').agg(
+        n_trials=('saccade_y_signed', 'count'),
+        mean_mib=('saccade_y_signed', 'mean'),
+        sem_mib=('saccade_y_signed', 'sem')
+    ).reset_index()
+    # only plot if we have at least 2 coherence levels with data
+    if psycho_df.shape[0] < 2:
+        axs[2, 2].text(0.5, 0.5, "Not enough data", ha='center', va='center')
+        axs[2, 2].set_title("MIB by Coherence")
+        axs[2, 2].set_xlabel("Coherence")
+        axs[2, 2].set_ylabel("MIB (saccade Y, dva)")
+    else:
+        # Plot means with SEM error bars using Matplotlib (avoid seaborn passing yerr into Line2D)
+        x_vals = psycho_df['coherence'].values
+        y_vals = psycho_df['mean_mib'].values
+        y_errs = psycho_df['sem_mib'].fillna(0).values
+        axs[2, 2].errorbar(
+            x_vals,
+            y_vals,
+            yerr=y_errs,
+            fmt='o-',
+            color='C0',
+            ecolor='C0',
+            elinewidth=1.5,
+            capsize=4,
+            capthick=1.5,
+            zorder=3
+        )
+        axs[2, 2].axhline(0, ls='--', color='gray', zorder=0)
+        axs[2, 2].set_title("MIB by Coherence (correct trials)")
+        axs[2, 2].set_xlabel("Coherence")
+        axs[2, 2].set_ylabel("MIB (saccade Y, dva)")
+
+        # Fit a Weibull function if we have at least 3 unique coherence levels
+        if psycho_df['coherence'].nunique() >= 3:
+            from scipy.optimize import curve_fit
+
+            def weibull(x, alpha, beta, gamma, delta):
+                """Weibull function for psychometric fitting."""
+                return gamma + (1 - gamma - delta) * (1 - np.exp(-(x / alpha) ** beta))
+
+            try:
+                popt, _ = curve_fit(
+                    weibull,
+                    psycho_df['coherence'],
+                    psycho_df['mean_mib'],
+                    bounds=([0, 0, -np.inf, -np.inf], [np.inf, np.inf, np.inf, np.inf]),
+                    maxfev=1000
+                )
+                x_fit = np.linspace(psycho_df['coherence'].min(), psycho_df['coherence'].max(), 100)
+                y_fit = weibull(x_fit, *popt)
+                axs[2, 2].plot(x_fit, y_fit, 'r--', label='Weibull fit')
+                axs[2, 2].legend()
+                fit_text = f"Weibull fit:\nα={popt[0]:.2f}, β={popt[1]:.2f}\nγ={popt[2]:.2f}, δ={popt[3]:.2f}"
+                axs[2, 2].text(0.05, 0.95, fit_text, transform=axs[2, 2].transAxes,
+                               verticalalignment='top', fontsize=10,
+                               bbox=dict(boxstyle='round', facecolor='white', alpha=0.5))
+            except Exception as e:
+                print(f"Warning: failed to fit Weibull function: {e}")
+        else:
+            axs[2, 2].text(0.5, 0.5, "Not enough coherence levels to fit", ha='center', va='center')
+            axs[2, 2].set_title("MIB Fit")
+            axs[2, 2].set_xlabel("Coherence")
+            axs[2, 2].set_ylabel("MIB (saccade Y, dva)")
+            axs[2, 2].set_ylim(psycho_df['mean_mib'].min() - 1, psycho_df['mean_mib'].max() + 1)
 
     plt.tight_layout()
     # draw and allow GUI event loop to process without blocking
