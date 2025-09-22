@@ -23,7 +23,8 @@ import os
 from datetime import date
 import sys
 import yaml
-import csv 
+import csv
+import time
 
 import numpy as np
 import pandas as pd
@@ -58,18 +59,18 @@ dlg_title = 'Realtime RDK Training'
 dlg_prompt = 'Enter session info ;)'
 dlg = gui.Dlg(dlg_title)
 dlg.addText(dlg_prompt)
-dlg.addFixedField('Date', today)
-dlg.addFixedField('Task', task_name)
-dlg.addField("Subject", "AQ")
-dlg.addField('Session', '')
-dlg.addField("Debug", False)
+dlg.addFixedField(key='Date', label="Date", initial=today)
+dlg.addFixedField(key='Task', label="Task", initial=task_name)
+dlg.addField(key="Subject", initial="AQ")
+dlg.addField(key='Session', initial='')
+dlg.addField(key="Debug", initial=False)
 
 # show dialog and wait for OK or Cancel
 ok_data = dlg.show()
 if dlg.OK:  # if ok_data is not None
-    sub_id = ok_data[0]
-    ses_id = f"{ok_data[1]:02d}"
-    debug = bool(ok_data[3])
+    sub_id = ok_data[2]
+    ses_id = int(ok_data[3])
+    debug = bool(ok_data[4])
 else:
     print('user cancelled')
     core.quit()
@@ -88,7 +89,7 @@ log_dir.mkdir(exist_ok=True, parents=True)
 data_file = str(data_dir / f"sub-{sub_id}_ses-{ses_id}_rdk_{today}.csv")
 log_file = str(data_dir / f"sub-{sub_id}_ses-{ses_id}_rdk_{today}.log")
 local_edf = str(data_dir / f"sub-{sub_id}_ses-{ses_id}_rdk_{today}.edf")
-host_edf = f"rdk_ses-{ses_id}_{today}.edf"
+host_edf = f"rdk_ses_{ses_id}.edf"
 
 calib_img_files = list(assets_dir.glob("*.png"))
 stim_config_file = config_dir / 'stimuli.yaml'
@@ -128,7 +129,7 @@ else:
 
 # Open an EDF data file on the Host PC
 try:
-    el_tracker.openDataFile(host_edf)
+    el_tracker.openDataFile(str(host_edf))
 except RuntimeError as err:
     logging.log(level=logging.ERROR, msg=f"Failed to open EDF file on Host PC: {err}")
     # close the link if we have one open
@@ -193,12 +194,6 @@ mon = monitors.Monitor(
 scn_width, scn_height = mon_params['resolution']
 mon.setSizePix(mon_params['resolution'])
 win = visual.Window(
-    name='ExperimentWindow',
-    title='RDK MIB Training',
-    size=(
-        mon_params['resolution'][0],
-        mon_params['resolution'][1]
-    ),
     color=win_params["color"],
     fullscr=full_screen,
     screen=screen_num,
@@ -522,7 +517,7 @@ def update_plots(history):
     # Fit a Weibull function to MIB differences by coherence
     mib_df = df[(df["correct"] == 1) & (df["saccade_rt"] > 0) & (df["saccade_y"].notna())].copy()
     # get rid of outlier reaction times
-    mib_df = mib_df["saccade_rt"] < (mib_df["saccade_rt"].mean() + 3 * mib_df["saccade_rt"].std())
+    # mib_df = mib_df["saccade_rt"] < (mib_df["saccade_rt"].mean() + 3 * mib_df["saccade_rt"].std())
     # get difference of saccade y by direction
     mib_df['saccade_y_signed'] = np.where(mib_df['direction'] == 90, mib_df['saccade_y_dva'], -mib_df['saccade_y_dva'])
     psycho_df = mib_df.groupby('coherence').agg(
@@ -582,30 +577,6 @@ def update_plots(history):
             axs[2, 2].set_xlabel("Coherence")
             axs[2, 2].set_ylabel("MIB (saccade Y, dva)")
             axs[2, 2].set_ylim(psycho_df['mean_mib'].min() - 1, psycho_df['mean_mib'].max() + 1)
-
-    # Plot MIB as a function of RT
-    if mib_df.shape[0] == 0:
-        axs[2, 2].text(0.5, 0.5, "No valid saccades", ha='center', va='center')
-        axs[2, 2].set_title("MIB by Coherence")
-        axs[2, 2].set_xlabel("Coherence")
-        axs[2, 2].set_ylabel("MIB (saccade Y, dva)")
-    else:
-        sns.scatterplot(
-            x='saccade_rt', y='saccade_y_signed',
-            hue='coherence', data=mib_df, ax=axs[2, 2],
-            palette="viridis", s=100
-        )
-        axs[2, 2].axhline(0, ls='--', color='gray', zorder=0)
-        axs[2, 2].set_title("MIB by Coherence")
-        axs[2, 2].set_xlabel("Coherence")
-        axs[2, 2].set_ylabel("MIB (saccade Y, dva)")
-        # Legend handling (only add if we have labels; safely remove if present)
-        handles, labels = axs[2, 2].get_legend_handles_labels()
-        if len(labels) > 0:
-            axs[2, 2].legend(title="Coherence", loc="upper right")
-        else:
-            if axs[2, 2].legend_ is not None:
-                axs[2, 2].legend_.remove()
 
     plt.tight_layout()
     # draw and allow GUI event loop to process without blocking
@@ -773,7 +744,7 @@ def terminate_task(history):
         # parameters: source_file_on_the_host, destination_file_on_local_drive
         # local_edf = os.path.join(session_folder, session_identifier + '.EDF')
         try:
-            el_tracker.receiveDataFile(edf_file, local_edf)
+            el_tracker.receiveDataFile(host_edf, local_edf)
         except RuntimeError as error:
             print('ERROR:', error)
 
@@ -789,7 +760,6 @@ def terminate_task(history):
         df.to_csv(data_dir / 'trial_history.csv', index=False)
     except Exception as e:
         # fallback: write CSV with stdlib to avoid pandas import internals
-        import csv
         out_path = data_dir / 'trial_history_fallback.csv'
         try:
             with open(out_path, 'w', newline='', encoding='utf-8') as fh:
@@ -1158,13 +1128,13 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
     }
 
     # Step 1: Acquire fixation
-    if dummy_mode:
+    if debug:
         # in dummy mode, just wait a moment and assume fixation acquired
-        time.sleep(0.5)
+        core.wait(0.5)
         fix_acquired = True
-    
-    start_t = time.time()
-    blink_start = time.time()
+
+    start_t = clock.getTime()
+    blink_start = clock.getTime()
     hold_start = None
     fix_acquired = False
     fix_on = True
@@ -1235,7 +1205,7 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
                 logging.info(f"Manual reward given on trial {trial_index}")
 
         # Try to get newest sample from EyeLink
-        if simulation_mode:
+        if debug:
             if time.time() - start_t > 0.5:
                 # in simulation mode, just wait 0.5 seconds and assume fixation acquired
                 fix_acquired = True
@@ -1357,7 +1327,7 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
         win.flip()
 
         # Check for fixation break
-        if simulation_mode:
+        if debug:
             if time.time() - start_t > 0.5:
                 # in simulation mode, just wait 0.5 seconds and assume fixation acquired
                 fixated = True
@@ -1475,7 +1445,7 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
             stim_onset = time.time()
 
         # Check for saccade events
-        if simulation_mode:
+        if debug:
             if time.time() - start_t > 0.3:
                 # in simulation mode, just wait 0.5 seconds and assume saccade made
                 got_sac = True
@@ -1587,7 +1557,7 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
         win.flip()
 
         # Check for saccade events
-        if simulation_mode:
+        if debug:
             if time.time() - start_t > 0.1:
                 landed_in_target = True
                 trial_data["saccade_duration"] = np.random.normal(100, 30)  # dummy value
@@ -1729,9 +1699,9 @@ intro_text = (
 )
 show_msg(win, intro_text, wait_for_keypress=False)
 
-if dummy_mode:
-    print('ERROR: This task requires real-time gaze data.\nIt cannot run in Dummy mode.')
-    terminate_task(trial_history)
+# if debug:
+#     print('ERROR: This task requires real-time gaze data.\nIt cannot run in Dummy mode.')
+#     terminate_task(trial_history)
 
 # run initial calibration before starting (same behavior as before)
 try:
