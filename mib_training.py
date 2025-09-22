@@ -92,22 +92,18 @@ local_edf = str(data_dir / f"sub-{sub_id}_ses-{ses_id}_rdk_{today}.edf")
 host_edf = f"rdk_ses_{ses_id}.edf"
 
 calib_img_files = list(assets_dir.glob("*.png"))
-stim_config_file = config_dir / 'stimuli.yaml'
-task_config_file = config_dir / 'task.yaml'
-disp_config_file = config_dir / 'display.yaml'
-eyetracker_config_file = config_dir / 'eyetracker.yaml'
-
 target_beep = assets_dir / 'qbeep.wav'
 good_beep = assets_dir / 'type.wav'
 error_beep = assets_dir / 'error.wav'
 
 # Load config
-stim_params = load_yaml(stim_config_file)
-task_params = load_yaml(task_config_file)
-disp_params = load_yaml(disp_config_file)
+stim_params = load_yaml(config_dir / 'stimuli.yaml')
+task_params = load_yaml(config_dir / 'task.yaml')
+disp_params = load_yaml(config_dir / 'display.yaml')
 mon_params = disp_params['Monitor']
 win_params = disp_params['Window']
-eyetracker_params = load_yaml(eyetracker_config_file)
+eyetracker_params = load_yaml(config_dir / 'eyetracker.yaml')
+plotting_params = load_yaml(config_dir / 'plotting.yaml')
 
 # Clocks
 clock = core.Clock()
@@ -185,16 +181,21 @@ el_tracker.sendCommand("calibration_type = HV5")
 screen_num = 1 if not debug else 0  # use the external display in non-debug mode
 full_screen = True if not debug else False
 
-mon = monitors.Monitor(
-    mon_params['name'],
-    width=mon_params['dimensions'][0],
-    distance=mon_params['distance'],
-    gamma=None
+all_monitors = monitors.getAllMonitors()
+if mon_params['name'] not in all_monitors:
+    mon = monitors.Monitor(
+        mon_params['name'],
+        width=mon_params['dimensions'][0],
+        distance=mon_params['distance'],
+        # gamma=None
     )
-scn_width, scn_height = mon_params['resolution']
-mon.setSizePix(mon_params['resolution'])
+    mon.setSizePix(mon_params['resolution'])
+    mon.save()
+else:
+    mon = monitors.Monitor(mon_params['name'])
+
 win = visual.Window(
-    color=win_params["color"],
+    # color=win_params["color"],
     fullscr=full_screen,
     screen=screen_num,
     monitor=mon,
@@ -206,6 +207,7 @@ win = visual.Window(
 
 # Pass the display pixel coordinates (left, top, right, bottom) to the tracker
 # see the EyeLink Installation Guide, "Customizing Screen Settings"
+scn_width, scn_height = mon_params['resolution']
 el_coords = "screen_pixel_coords = 0 0 %d %d" % (scn_width - 1, scn_height - 1)
 el_tracker.sendCommand(el_coords)
 
@@ -216,20 +218,16 @@ dv_coords = "DISPLAY_COORDS  0 0 %d %d" % (scn_width - 1, scn_height - 1)
 el_tracker.sendMessage(dv_coords)
 
 # Keep calibration/validation targets closer to the center
-# Option A: shrink the area used to generate default targets (simple)
-el_tracker.sendCommand("calibration_area_proportion 0.6 0.6")
-el_tracker.sendCommand("validation_area_proportion 0.6 0.6")
-
-# Option B: explicitly set target coordinates (HV5: center, left, right, up, down)
-# cx, cy = scn_width // 2, scn_height // 2
-# dx, dy = int(scn_width * 0.20), int(scn_height * 0.20)  # reduce to taste
-# coords = f"{cx},{cy} {cx-dx},{cy} {cx+dx},{cy} {cx},{cy-dy} {cx},{cy+dy}"
-# el_tracker.sendCommand(f"calibration_targets {coords}")
-# el_tracker.sendCommand(f"validation_targets {coords}")
+el_tracker.sendCommand(
+    f"calibration_area_proportion {eyetracker_params['area_proportion'][0]} {eyetracker_params['area_proportion'][1]}"
+)
+el_tracker.sendCommand(
+    f"validation_area_proportion {eyetracker_params['area_proportion'][0]} {eyetracker_params['area_proportion'][1]}"
+)
 
 # Configure a graphics environment (genv) for tracker calibration
 genv = EyeLinkCoreGraphicsPsychoPy(el_tracker, win)
-print(genv)  # print out the version number of the CoreGraphics library
+logging.log(level=logging.INFO, msg=genv)  # print out the version number of the CoreGraphics library
 
 # register a reward callback so each accepted calibration target can trigger reward
 # try:
@@ -238,48 +236,25 @@ print(genv)  # print out the version number of the CoreGraphics library
 #     pass
 
 # Set background and foreground colors for the calibration target
-# in PsychoPy, (-1, -1, -1)=black, (1, 1, 1)=white, (0, 0, 0)=mid-gray
-foreground_color = (-1, -1, -1)
-background_color = win.color
-genv.setCalibrationColors(foreground_color, background_color)
+genv.setCalibrationColors(eyetracker_params['foreground_color'], eyetracker_params['background_color'])
 
 # Set up the calibration target
-#
-# The target could be a "circle" (default), a "picture", a "movie" clip,
-# or a rotating "spiral". To configure the type of calibration target, set
-# genv.setTargetType to "circle", "picture", "movie", or "spiral", e.g.,
-# genv.setTargetType('picture')
-#
-# Use gen.setPictureTarget() to set a "picture" target
-# genv.setPictureTarget(os.path.join('images', 'fixTarget.bmp'))
-#
-# Use genv.setMovieTarget() to set a "movie" target
-# genv.setMovieTarget(os.path.join('videos', 'calibVid.mov'))
-
-# Use the default calibration target ('circle')
 genv.setTargetType('picture')
-
-assets_dir = Path(__file__).parent / "assets" / "calibration"
-calib_files = list(assets_dir.glob("*.png"))
-calib_images = list(np.random.choice(calib_files, 5))
+calib_images = list(np.random.choice(calib_img_files, int(eyetracker_params["calibration_type"][-1]), replace=False))
 genv.setPictureTarget(calib_images)
-
-# Configure the size of the calibration target (in pixels)
-# this option applies only to "circle" and "spiral" targets
-genv.setTargetSize(100)
+genv.setTargetSize(int(eyetracker_params['target_size']))
 
 # Beeps to play during calibration, validation and drift correction
-# parameters: target, good, error
-#     target -- sound to play when target moves
-#     good -- sound to play on successful operation
-#     error -- sound to play on failure or interruption
-# Each parameter could be ''--default sound, 'off'--no sound, or a wav file
-genv.setCalibrationSounds('qbeep.wav', 'type.wav', 'error.wav')
+genv.setCalibrationSounds(
+    str(target_beep),
+    str(good_beep),
+    str(error_beep)
+)
 
 # Request Pylink to use the PsychoPy window we opened above for calibration
 pylink.openGraphicsEx(genv)
 
-# define a few helper functions for trial handling
+# Plotting
 plt.ion()  # interactive mode on
 
 _plot_fig = None
@@ -294,7 +269,6 @@ def update_plots(history):
 
     # Plotting style
     sns.set_style("ticks")
-    # remove top and right spines
     sns.despine()
     sns.set_context("poster", font_scale=0.6)
 
@@ -587,29 +561,6 @@ def update_plots(history):
     plt.pause(0.001)
 
 
-def clear_screen(win):
-    """ clear up the PsychoPy window"""
-
-    win.fillColor = genv.getBackgroundColor()
-    win.flip()
-
-
-def show_msg(win, text, wait_for_keypress=True):
-    """ Show task instructions on screen"""
-
-    msg = visual.TextStim(win, text,
-                          color=genv.getForegroundColor(),
-                          wrapWidth=scn_width/2)
-    clear_screen(win)
-    msg.draw()
-    win.flip()
-
-    # wait indefinitely, terminates upon any key press
-    if wait_for_keypress:
-        event.waitKeys()
-        clear_screen(win)
-
-
 def give_reward(reward_voltage=5.0, duration_ms=200, pulses=2, inter_pulse_ms=200):
     """
     Hardware‑timed reward output matching the MATLAB session approach.
@@ -661,54 +612,6 @@ def give_reward(reward_voltage=5.0, duration_ms=200, pulses=2, inter_pulse_ms=20
         print("Warning: failed to give hardware‑timed reward:", e)
 
         print(f"Reward (buffered): {reward_voltage}V x{pulses} pulses, {duration_ms}ms on, {inter_pulse_ms}ms gap")
-
-
-# def give_reward(reward_voltage=5.0, duration_ms=200, pulses=2, inter_pulse_ms=100):
-#     """
-#     Deliver one or more reward pulses on the analog output.
-
-#     Parameters:
-#     - reward_voltage: voltage for each pulse (0-10V)
-#     - duration_ms: duration of each pulse in milliseconds
-#     - pulses: number of pulses to deliver (integer >=1)
-#     - inter_pulse_ms: gap between pulses in milliseconds (voltage 0 during gap)
-#     """
-#     device_name = 'Dev1'  # update as appropriate
-#     channel_id = 'ao0'
-
-#     # sanity limits
-#     try:
-#         pulses = int(pulses)
-#     except Exception:
-#         pulses = 1
-#     pulses = max(1, min(pulses, 20))  # cap to 20 pulses
-
-#     inter_pulse_ms = max(0, int(inter_pulse_ms))
-
-#     try:
-#         with nidaqmx.Task() as task:
-#             task.ao_channels.add_ao_voltage_chan(
-#                 f"{device_name}/{channel_id}",
-#                 min_val=0.0, max_val=10.0, units=VoltageUnits.VOLTS
-#             )
-#             for i in range(pulses):
-#                 # Write the reward voltage, hold for duration, then write 0
-#                 task.write(float(reward_voltage))
-#                 time.sleep(duration_ms / 1000.0)
-#                 task.write(0.0)
-#                 if i < (pulses - 1) and inter_pulse_ms > 0:
-#                     time.sleep(inter_pulse_ms / 1000.0)
-#     except Exception as e:
-#         print("Warning: failed to give reward:", e)
-
-#     # small print for debugging/logging
-#     print(f"Reward: {reward_voltage}V x{pulses} pulses, {duration_ms}ms each, {inter_pulse_ms}ms gap")
-
-
-def read_config(file_path):
-    with open(file_path, 'r') as file:
-        config = yaml.safe_load(file)
-    return config
 
 
 def terminate_task(history):
