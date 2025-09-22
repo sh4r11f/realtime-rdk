@@ -294,7 +294,7 @@ def update_plots(history):
     df["stim_y_dva"] = df["stim_y"].apply(lambda y: pix2deg(y, monitor=mon))
     # get rid of extreme outliers in reaction time
     # df = df[df["saccade_rt"] < abs(df["saccade_rt"].mean() + 3 * df["saccade_rt"].std())]
-    df = df[(df["saccade_rt"] < 500) & (df["saccade_rt"] > 50)]
+    # df = df[(df["saccade_rt"] < 500) & (df["saccade_rt"] > 50)]
 
     # create figure once or recreate if closed
     if _plot_fig is None or not plt.fignum_exists(_plot_fig.number):
@@ -592,7 +592,7 @@ def update_plots(history):
                     psycho_df['coherence'],
                     psycho_df['mean_mib'],
                     bounds=([0, 0, -np.inf, -np.inf], [np.inf, np.inf, np.inf, np.inf]),
-                    maxfev=1000
+                    maxfev=100
                 )
                 x_fit = np.linspace(psycho_df['coherence'].min(), psycho_df['coherence'].max(), 100)
                 y_fit = weibull(x_fit, *popt)
