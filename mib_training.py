@@ -1,10 +1,29 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# =================================================================================================== #
+#
+#
+#                     SCRIPT: mib_training.py
+#
+#
+#                DESCRIPTION: Script to run training for the MIB task
+#
+#
+#                       RULE: DAYW
+#
+#
+#
+#                    CREATOR: Sharif Saleki
+#                       TIME: 09-19-2025-7810598105114117
+#                      SPACE: Stanford Univeristy, Stanford, CA
+#
+# =================================================================================================== #
 from pathlib import Path
-
 import os
 from datetime import date
-import time
 import sys
 import yaml
+import csv 
 
 import numpy as np
 import pandas as pd
@@ -15,124 +34,108 @@ from psychopy import visual, core, event, monitors, logging, gui
 from psychopy.tools.monitorunittools import deg2pix, pix2deg
 
 import nidaqmx
-from nidaqmx.constants import VoltageUnits
+from nidaqmx.constants import VoltageUnits, AcquisitionType
 
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-
 # Switch to the script folder
-root = Path().cwd()
-if root.is_dir():
-    os.chdir(root)
-
-# Directories
-ass_dir = root / 'assets'
+root = Path(__file__).parent.resolve()
+os.chdir(root)
+# Add the source directory to the path
 src_dir = root / 'src'
-data_dir = root / 'data'
-config_dir = root / 'config'
-log_dir = root / 'logs'
-log_dir.mkdir(exist_ok=True, parents=True)
-
-# Ensure local src directory is importable
 if str(src_dir) not in sys.path:
     sys.path.append(str(src_dir))
 
-# Clock
-clock = core.Clock()
+from src.rdk import GaussianRDK
+from src.utils import load_yaml
 
-# Logging
-log_file = log_dir / f"mib_training_{date.today().strftime('%Y_%m_%d')}.log"
-logging.console.setLevel(logging.CRITICAL)
+# Get info from the gui interface
+today = date.today().strftime("%Y_%m_%d")
+task_name = "RDK MIB"
 
-# Set this variable to True to run the script in "Dummy Mode"
-dummy_mode = False
-
-# Simulation mode: set to True to simulate eye-tracker
-simulation_mode = False
-
-# Set this variable to True to run the task in full screen mode
-# It is easier to debug the script in non-fullscreen mode
-full_screen = True
-
-# Set up EDF data file name and local data folder
-# The EDF data filename should not exceed 8 alphanumeric characters
-# use ONLY number 0-9, letters, & _ (underscore) in the filename
-edf_fname = 'rdk'
-
-# Prompt user to specify an EDF data filename
-# before we open a fullscreen window
-dlg_title = 'Session'
-dlg_prompt = 'Please enter session info ;)'
+dlg_title = 'Realtime RDK Training'
+dlg_prompt = 'Enter session info ;)'
 dlg = gui.Dlg(dlg_title)
 dlg.addText(dlg_prompt)
+dlg.addFixedField('Date', today)
+dlg.addFixedField('Task', task_name)
 dlg.addField("Subject", "AQ")
 dlg.addField('Session', '')
+dlg.addField("Debug", False)
 
 # show dialog and wait for OK or Cancel
 ok_data = dlg.show()
 if dlg.OK:  # if ok_data is not None
     sub_id = ok_data[0]
-    ses_id = int(ok_data[1])
-    print('Subject: {}'.format(sub_id))
-    print('Session: {}'.format(ses_id))
+    ses_id = f"{ok_data[1]:02d}"
+    debug = bool(ok_data[3])
 else:
     print('user cancelled')
     core.quit()
-    sys.exit()
 
-# Set up a folder to store the EDF data files and the associated resources
-# e.g., files defining the interest areas used in each trial
-root = Path().cwd()
-today = date.today().strftime("%Y_%m_%d")
+# Directories
+assets_dir = root / 'assets'
+config_dir = root / 'config'
 data_dir = root / 'data' / today / f"sub-{sub_id}" / f"ses-{ses_id:02d}"
 data_dir.mkdir(exist_ok=True, parents=True)
 fig_dir = root / 'figures' / today / f"sub-{sub_id}" / f"ses-{ses_id:02d}"
 fig_dir.mkdir(exist_ok=True, parents=True)
-local_edf = str(data_dir / f"sub-{sub_id}_ses-{ses_id}_rdk_{today}.edf")
+log_dir = root / 'logs' / today
+log_dir.mkdir(exist_ok=True, parents=True)
 
-# Step 1: Connect to the EyeLink Host PC
-#
-# The Host IP address, by default, is "100.1.1.1".
-# the "el_tracker" objected created here can be accessed through the Pylink
-# Set the Host PC address to "None" (without quotes) to run the script
-# in "Dummy Mode"
-if dummy_mode:
+# Files
+data_file = str(data_dir / f"sub-{sub_id}_ses-{ses_id}_rdk_{today}.csv")
+log_file = str(data_dir / f"sub-{sub_id}_ses-{ses_id}_rdk_{today}.log")
+local_edf = str(data_dir / f"sub-{sub_id}_ses-{ses_id}_rdk_{today}.edf")
+host_edf = f"rdk_ses-{ses_id}_{today}.edf"
+
+calib_img_files = list(assets_dir.glob("*.png"))
+stim_config_file = config_dir / 'stimuli.yaml'
+task_config_file = config_dir / 'task.yaml'
+
+target_beep = assets_dir / 'qbeep.wav'
+good_beep = assets_dir / 'type.wav'
+error_beep = assets_dir / 'error.wav'
+
+# Load config
+stim_params = load_yaml(stim_config_file)
+task_params = load_yaml(task_config_file)
+
+# Clocks
+clock = core.Clock()
+
+# Logging
+logging.console.setLevel(logging.CRITICAL)
+logging.LogFile(log_file, level=logging.INFO, filemode='w')
+logging.setDefaultClock(clock)
+
+# Connect to EyeLink Tracker
+if debug:
     el_tracker = pylink.EyeLink(None)
 else:
     try:
         el_tracker = pylink.EyeLink("100.1.1.1")
     except RuntimeError as error:
-        print('ERROR:', error)
+        logging.log(level=logging.ERROR, msg=f"Failed to connect to EyeLink Tracker: {error}")
         core.quit()
-        sys.exit()
 
-# Step 2: Open an EDF data file on the Host PC
-edf_file = "rdk.EDF"
+# Open an EDF data file on the Host PC
 try:
-    el_tracker.openDataFile(edf_file)
+    el_tracker.openDataFile(host_edf)
 except RuntimeError as err:
-    print('ERROR:', err)
+    logging.log(level=logging.ERROR, msg=f"Failed to open EDF file on Host PC: {err}")
     # close the link if we have one open
     if el_tracker.isConnected():
         el_tracker.close()
     core.quit()
-    sys.exit()
 
 # Add a header text to the EDF file to identify the current experiment name
-# This is OPTIONAL. If your text starts with "RECORDED BY " it will be
-# available in DataViewer's Inspector window by clicking
-# the EDF session node in the top panel and looking for the "Recorded By:"
-# field in the bottom panel of the Inspector.
-# preamble_text = 'RECORDED BY DX' % Path(__file__).name
-# el_tracker.sendCommand("add_file_preamble_text '%s'" % preamble_text)
 try:
-    el_tracker.sendCommand("add_file_preamble_text 'RECORDED BY DX'")
+    el_tracker.sendCommand("add_file_preamble_text 'RECORDED BY RDK'")
 except RuntimeError as e:
-    print('ERROR:', e)
+    logging.log(level=logging.ERROR, msg=f"Failed to add preamble text to EDF file: {e}")
 
-# Step 3: Configure the tracker
-#
 # Put the tracker in offline mode before we change tracking parameters
 el_tracker.setOfflineMode()
 
@@ -567,7 +570,6 @@ def give_reward(reward_voltage=5.0, duration_ms=200, pulses=2, inter_pulse_ms=20
         signal = np.array([float(reward_voltage)])
 
     try:
-        from nidaqmx.constants import AcquisitionType
         with nidaqmx.Task() as task:
             task.ao_channels.add_ao_voltage_chan(
                 f"{device_name}/{channel_id}",
@@ -856,8 +858,6 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
     else:
         rdk_x = -rdk_ecc + jitter
     rdk_y = jitter
-    # Import here to avoid circulars at module import time
-    from src.rdk import GaussianRDK
 
     # Gaussian sigma defaults to half-radius; allow override via YAML (optional)
     rdk_sigma = deg2pix(rdk_params.get("gauss_sigma", rdk_params["field_size"]/2.0), mon)
