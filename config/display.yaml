@@ -1,0 +1,9 @@
+Monitor:
+  name: VPixx
+  dimensions: [54.0, 30.0]
+  distance: 42.0
+  refresh_rate: 100.0
+  resolution: [1920, 1080]
+Window:
+  color: [0, 0, 0]
+  units: pix

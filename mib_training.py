@@ -93,6 +93,8 @@ host_edf = f"rdk_ses-{ses_id}_{today}.edf"
 calib_img_files = list(assets_dir.glob("*.png"))
 stim_config_file = config_dir / 'stimuli.yaml'
 task_config_file = config_dir / 'task.yaml'
+disp_config_file = config_dir / 'display.yaml'
+eyetracker_config_file = config_dir / 'eyetracker.yaml'
 
 target_beep = assets_dir / 'qbeep.wav'
 good_beep = assets_dir / 'type.wav'
@@ -101,6 +103,10 @@ error_beep = assets_dir / 'error.wav'
 # Load config
 stim_params = load_yaml(stim_config_file)
 task_params = load_yaml(task_config_file)
+disp_params = load_yaml(disp_config_file)
+mon_params = disp_params['Monitor']
+win_params = disp_params['Window']
+eyetracker_params = load_yaml(eyetracker_config_file)
 
 # Clocks
 clock = core.Clock()
@@ -142,7 +148,7 @@ el_tracker.setOfflineMode()
 # Get the software version:  1-EyeLink I, 2-EyeLink II, 3/4-EyeLink 1000,
 # 5-EyeLink 1000 Plus, 6-Portable DUO
 eyelink_ver = 0  # set version to 0, in case running in Dummy mode
-if not dummy_mode:
+if not debug:
     vstr = el_tracker.getTrackerVersionString()
     eyelink_ver = int(vstr.split()[-1].split('.')[0])
     # print out some version info in the shell
@@ -169,29 +175,39 @@ el_tracker.sendCommand("link_sample_data = %s" % link_sample_flags)
 
 # Optional tracking parameters
 # Sample rate, 250, 500, 1000, or 2000, check your tracker specification
-# if eyelink_ver > 2:
-#     el_tracker.sendCommand("sample_rate 1000")
+if eyelink_ver > 2:
+    el_tracker.sendCommand("sample_rate 1000")
 # Choose a calibration type, H3, HV3, HV5, HV13 (HV = horizontal/vertical),
 el_tracker.sendCommand("calibration_type = HV5")
-# Set a gamepad button to accept calibration/drift check target
-# You need a supported gamepad/button box that is connected to the Host PC
-el_tracker.sendCommand("button_function 5 'accept_target_fixation'")
 
-# Step 4: set up a graphics environment for calibration
-#
-# Open a window, be sure to specify monitor parameters
-screen_num = 1
+# Monitor and window
+screen_num = 1 if not debug else 0  # use the external display in non-debug mode
+full_screen = True if not debug else False
 
-mon = monitors.Monitor('myMonitor', width=54.0, distance=43.0)
-mon.setSizePix((1920, 1080))
-win = visual.Window(fullscr=full_screen,
-                    screen=screen_num,
-                    monitor=mon,
-                    winType='pyglet',
-                    units='pix')
-
-# get the native screen resolution used by PsychoPy
-scn_width, scn_height = win.size
+mon = monitors.Monitor(
+    mon_params['name'],
+    width=mon_params['dimensions'][0],
+    distance=mon_params['distance'],
+    gamma=None
+    )
+scn_width, scn_height = mon_params['resolution']
+mon.setSizePix(mon_params['resolution'])
+win = visual.Window(
+    name='ExperimentWindow',
+    title='RDK MIB Training',
+    size=(
+        mon_params['resolution'][0],
+        mon_params['resolution'][1]
+    ),
+    color=win_params["color"],
+    fullscr=full_screen,
+    screen=screen_num,
+    monitor=mon,
+    winType='pyglet',
+    units=win_params['units'],
+    waitBlanking=True,
+    checkTiming=True
+)
 
 # Pass the display pixel coordinates (left, top, right, bottom) to the tracker
 # see the EyeLink Installation Guide, "Customizing Screen Settings"
@@ -502,6 +518,94 @@ def update_plots(history):
         else:
             if axs[2, 1].legend_ is not None:
                 axs[2, 1].legend_.remove()
+
+    # Fit a Weibull function to MIB differences by coherence
+    mib_df = df[(df["correct"] == 1) & (df["saccade_rt"] > 0) & (df["saccade_y"].notna())].copy()
+    # get rid of outlier reaction times
+    mib_df = mib_df["saccade_rt"] < (mib_df["saccade_rt"].mean() + 3 * mib_df["saccade_rt"].std())
+    # get difference of saccade y by direction
+    mib_df['saccade_y_signed'] = np.where(mib_df['direction'] == 90, mib_df['saccade_y_dva'], -mib_df['saccade_y_dva'])
+    psycho_df = mib_df.groupby('coherence').agg(
+        n_trials=('saccade_y_signed', 'count'),
+        mean_mib=('saccade_y_signed', 'mean'),
+        sem_mib=('saccade_y_signed', 'sem')
+    ).reset_index()
+    # only plot if we have at least 2 coherence levels with data
+    if psycho_df.shape[0] < 2:
+        axs[2, 2].text(0.5, 0.5, "Not enough data", ha='center', va='center')
+        axs[2, 2].set_title("MIB by Coherence")
+        axs[2, 2].set_xlabel("Coherence")
+        axs[2, 2].set_ylabel("MIB (saccade Y, dva)")
+    else:
+        sns.pointplot(
+            data=psycho_df,
+            x='coherence',
+            y='mean_mib',
+            yerr=psycho_df['sem_mib'],
+            color='C0',
+            ax=axs[2, 2]
+        )
+        axs[2, 2].axhline(0, ls='--', color='gray', zorder=0)
+        axs[2, 2].set_title("MIB by Coherence (correct trials)")
+        axs[2, 2].set_xlabel("Coherence")
+        axs[2, 2].set_ylabel("MIB (saccade Y, dva)")
+
+        # Fit a Weibull function if we have at least 3 unique coherence levels
+        if psycho_df['coherence'].nunique() >= 3:
+            from scipy.optimize import curve_fit
+
+            def weibull(x, alpha, beta, gamma, delta):
+                """Weibull function for psychometric fitting."""
+                return gamma + (1 - gamma - delta) * (1 - np.exp(-(x / alpha) ** beta))
+
+            try:
+                popt, _ = curve_fit(
+                    weibull,
+                    psycho_df['coherence'],
+                    psycho_df['mean_mib'],
+                    bounds=([0, 0, -np.inf, -np.inf], [np.inf, np.inf, np.inf, np.inf]),
+                    maxfev=10000
+                )
+                x_fit = np.linspace(psycho_df['coherence'].min(), psycho_df['coherence'].max(), 100)
+                y_fit = weibull(x_fit, *popt)
+                axs[2, 2].plot(x_fit, y_fit, 'r--', label='Weibull fit')
+                axs[2, 2].legend()
+                fit_text = f"Weibull fit:\nα={popt[0]:.2f}, β={popt[1]:.2f}\nγ={popt[2]:.2f}, δ={popt[3]:.2f}"
+                axs[2, 2].text(0.05, 0.95, fit_text, transform=axs[2, 2].transAxes,
+                               verticalalignment='top', fontsize=10,
+                               bbox=dict(boxstyle='round', facecolor='white', alpha=0.5))
+            except Exception as e:
+                print(f"Warning: failed to fit Weibull function: {e}")
+        else:
+            axs[2, 2].text(0.5, 0.5, "Not enough coherence levels to fit", ha='center', va='center')
+            axs[2, 2].set_title("MIB by Coherence")
+            axs[2, 2].set_xlabel("Coherence")
+            axs[2, 2].set_ylabel("MIB (saccade Y, dva)")
+            axs[2, 2].set_ylim(psycho_df['mean_mib'].min() - 1, psycho_df['mean_mib'].max() + 1)
+
+    # Plot MIB as a function of RT
+    if mib_df.shape[0] == 0:
+        axs[2, 2].text(0.5, 0.5, "No valid saccades", ha='center', va='center')
+        axs[2, 2].set_title("MIB by Coherence")
+        axs[2, 2].set_xlabel("Coherence")
+        axs[2, 2].set_ylabel("MIB (saccade Y, dva)")
+    else:
+        sns.scatterplot(
+            x='saccade_rt', y='saccade_y_signed',
+            hue='coherence', data=mib_df, ax=axs[2, 2],
+            palette="viridis", s=100
+        )
+        axs[2, 2].axhline(0, ls='--', color='gray', zorder=0)
+        axs[2, 2].set_title("MIB by Coherence")
+        axs[2, 2].set_xlabel("Coherence")
+        axs[2, 2].set_ylabel("MIB (saccade Y, dva)")
+        # Legend handling (only add if we have labels; safely remove if present)
+        handles, labels = axs[2, 2].get_legend_handles_labels()
+        if len(labels) > 0:
+            axs[2, 2].legend(title="Coherence", loc="upper right")
+        else:
+            if axs[2, 2].legend_ is not None:
+                axs[2, 2].legend_.remove()
 
     plt.tight_layout()
     # draw and allow GUI event loop to process without blocking
