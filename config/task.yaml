@@ -1,8 +1,8 @@
 fixation_tolerance: 3.5  # dva
 fixation_timeout: 5000  # ms
 fixation_hold: 200  # ms
-fixation_duration: 250  # ms
-fixation_jitter: 50  # ms
+fixation_duration: 500  # ms
+fixation_jitter: 250  # ms
 fixation_blink_period: 300  # ms
 saccade_tolerance: 3  # dva
 saccade_initiation_duration: 500  # ms
@@ -14,3 +14,6 @@ inter_trial_interval: 100  # ms
 reward_amount: 0.25  # ml
 directions: [90, 270]  # degrees (90=up, 270=down)
 n_trials_per_condition: 100
+gabor_spatial_frequencies: [0.25]  # cycles/dva
+gabor_temporal_frequencies: [3, 6]  # Hz
+gabor_directions: [90, 270]  # degrees

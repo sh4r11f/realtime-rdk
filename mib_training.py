@@ -66,7 +66,7 @@ dlg_title = 'Session'
 dlg_prompt = 'Please enter session info ;)'
 dlg = gui.Dlg(dlg_title)
 dlg.addText(dlg_prompt)
-dlg.addField("Subject", "AQ")
+dlg.addField("Subject", "HD")
 dlg.addField('Session', '')
 
 # show dialog and wait for OK or Cancel
@@ -527,10 +527,24 @@ def update_plots(history):
             hue='direction_name', data=angle_df, ax=axs[2, 1],
             palette="Set1", s=100
         )
+        # Fit lines for each direction 
+        sns.regplot(
+            x='saccade_rt', y='saccade_angle',
+            data=angle_df[angle_df['direction'] == 90],
+            scatter=False, ax=axs[2, 1],
+            color='C0', line_kws={'linestyle': '-'}
+        )
+        sns.regplot(
+            x='saccade_rt', y='saccade_angle',
+            data=angle_df[angle_df['direction'] == 270],
+            scatter=False, ax=axs[2, 1],
+            color='C1', line_kws={'linestyle': '-'}
+        )
         axs[2, 1].set_title("Saccade Angle vs. Latency")
         axs[2, 1].set_xlabel("Saccade Latency (ms)")
         axs[2, 1].set_ylabel("Saccade Angle (degrees)")
-        axs[2, 1].set_ylim(0, 360)
+        axs[2, 1].axhline(180, ls='--', color='gray')
+        # axs[2, 1].set_ylim(0, 360)
         # Legend handling (only add if we have labels; safely remove if present)
         handles, labels = axs[2, 1].get_legend_handles_labels()
         if len(labels) > 0:

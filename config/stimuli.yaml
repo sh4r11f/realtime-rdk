@@ -35,3 +35,14 @@ Noise:
   field_size: 10  # dva
   dot_life: 80
   side: left
+# ---------------------------------------
+Gabor:
+  eccentricity: 15  # dva
+  sigma: 2  # dva
+  size: 12  # dva
+  contrast: 0.8  # proportion (0-1)
+  opacity: 0.5
+  position_jitter: 0  # dva
+  orientation: 60  # degrees
+  texture: sqr
+  side: left
