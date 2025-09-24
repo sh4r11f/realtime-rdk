@@ -17,3 +17,25 @@ n_trials_per_condition: 100
 gabor_spatial_frequencies: [0.25]  # cycles/dva
 gabor_temporal_frequencies: [3, 6]  # Hz
 gabor_directions: [90, 270]  # degrees
+
+# QUEST+ adaptive staircase settings for MIB
+questplus:
+  enabled: true
+  # Number of adaptive trials per speed condition
+  n_trials_per_speed: 60
+  # Use coherence_levels above as intensity grid; can be overridden here
+  intensity_values: null  # if null, use coherence_levels
+  # Psychometric parameter grids (Weibull)
+  threshold_vals: [0.0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 1.0]
+  slope_vals: [2.0, 3.5, 5.0]
+  lower_asymptote_vals: [0.05]  # baseline success rate
+  lapse_rate_vals: [0.02]
+  stim_scale: linear  # 'linear' | 'log10' | 'dB'
+  selection_method: minEntropy  # 'minEntropy' | 'minNEntropy'
+  selection_options:
+    N: 1
+    maxConsecutiveReps: 2
+  # Classify a trial as success if signed MIB >= this threshold (in dva)
+  mib_success_threshold_dva: 1.0
+  # How to pick direction each adaptive trial: 'random' or 'alternate'
+  direction_policy: random

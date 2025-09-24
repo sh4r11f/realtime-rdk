@@ -13,6 +13,7 @@ import pylink
 from EyeLinkCoreGraphicsPsychoPy import EyeLinkCoreGraphicsPsychoPy
 from psychopy import visual, core, event, monitors, logging, gui
 from psychopy.tools.monitorunittools import deg2pix, pix2deg
+from psychopy.data.staircase import QuestPlusHandler
 
 import nidaqmx
 from nidaqmx.constants import VoltageUnits
@@ -361,7 +362,7 @@ def update_plots(history):
             # hue='speed_dva_per_sec',
             estimator=np.mean,
             errorbar='se',
-            # palette='muted',
+            palette='muted',
             ax=axs[0, 2]
         )
         axs[0, 2].axhline(0, ls='--', color='gray', zorder=0)
@@ -527,7 +528,7 @@ def update_plots(history):
             hue='direction_name', data=angle_df, ax=axs[2, 1],
             palette="Set1", s=100
         )
-        # Fit lines for each direction 
+    # Fit lines for each direction
         sns.regplot(
             x='saccade_rt', y='saccade_angle',
             data=angle_df[angle_df['direction'] == 90],
@@ -1025,7 +1026,6 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
 
     # Fixation stimulus
     fix_params = stim_params["Fixation"]
-    # rand_color = np.random.uniform(-1.0, 1.0, size=3)
     fix_cross = visual.Circle(
         win,
         radius=deg2pix(fix_params["size"], mon),
@@ -1033,7 +1033,6 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
         lineColor=fix_params["line_color"],
         lineWidth=fix_params["line_width"],
     )
-    # fix_params = stim_params["FixationImage"]
     # fix_img = np.random.choice(calib_images)
     # fix_cross = visual.ImageStim(
     #     win,
@@ -1042,7 +1041,7 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
     #     pos=(0, 0),
     #     units='pix',
     #     interpolate=True,
-    #     color=rand_color,
+    #     color=(1, 1, 1),
     #     colorSpace='rgb',
     #     opacity=1.0,
     #     flipHoriz=False,
@@ -1619,11 +1618,25 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
                 trial_data["correct"] = 1
                 break
 
-        
         try:
             sample = el_tracker.getNewestSample()
+            eye_ev = el_tracker.getNextData()
+            if eye_ev != 200:
+                if eye_ev == pylink.STARTBLINK:
+                    print(f"Found event: {eye_ev} (blink start)")
+                elif eye_ev == pylink.ENDBLINK:
+                    print(f"Found event: {eye_ev} (blink end)")
+                elif eye_ev == pylink.FIXUPDATE:
+                    print(f"Found event: {eye_ev} (fixation update)")
+                elif eye_ev == pylink.STARTSACCADE:
+                    print(f"Found event: {eye_ev} (saccade start)")
+                elif eye_ev == pylink.ENDSACCADE:
+                    print(f"Found event: {eye_ev} (saccade end)")
+                else:
+                    print(f"Found event: {eye_ev} (other)")
         except Exception:
             sample = None
+
         gx = gy = None
         gaze_center_x = gaze_center_y = None
 
@@ -1652,6 +1665,8 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
                 trial_data["saccade_duration"] = time.time() - start_t
                 trial_data["saccade_x"] = gx - cx
                 trial_data["saccade_y"] = -gy + cy
+                # print(f"gaze_center_x: {gaze_center_x}, gaze_center_y: {gaze_center_y}")
+                # print(f"Target x: {rdk_x}, Target y: {rdk_y}, Target center: ({rdk_cx}, {rdk_cy})")
                 break
 
     # Check if the saccade was correct
@@ -1750,75 +1765,226 @@ except RuntimeError as err:
     except Exception:
         pass
 
-# Make all trials with all combinations of conditions and repeat and shuffle them
-all_trials = []
 stim_params = read_config(config_dir / 'stimuli.yaml')
 task_params = read_config(config_dir / 'task.yaml')
 
-for speed in task_params["rdk_speeds"]:
-    for coherence in task_params["coherence_levels"]:
-        for direction in task_params["directions"]:
-            all_trials.append({
-                "speed": speed,
-                "coherence": coherence,
-                "direction": direction,
-            })
+# QUEST+ config
+qp_cfg = task_params.get('questplus', {}) or {}
+use_qp = bool(qp_cfg.get('enabled', False))
 
-all_trials = all_trials * task_params.get("n_trials_per_condition", 10)
-np.random.shuffle(all_trials)
+# Helper to compute MIB-based success for QUEST+
 
-# Run
-n_correct_in_a_row = 0
-# while trial_index <= total_trials:
-for trial_index, trial_conditions in enumerate(all_trials, start=1):
 
-    # Run trial
-    results = run_trial(trial_conditions, trial_index, stim_params, task_params, trial_history)
+def mib_success_for_qp(result_row, direction, threshold_dva):
+    try:
+        if result_row is None or not isinstance(result_row, dict):
+            return False
+        # require a saccade to target region for a valid success
+        if int(result_row.get('correct', 0)) != 1:
+            return False
+        sy = result_row.get('saccade_y', None)
+        if sy is None or sy == -1:
+            return False
+        # convert to dva and sign so that positive is "towards cue direction"
+        sy_dva = pix2deg(sy, monitor=mon)
+        signed = sy_dva if direction == 90 else (-sy_dva if direction == 270 else sy_dva)
+        return float(signed) >= float(threshold_dva)
+    except Exception:
+        return False
 
-    # if the trial was aborted (None), show pause menu to pick next mode
-    if results is None:
-        choice = pause_menu(el_tracker)
-        if choice is None:
-            terminate_task(trial_history)
-        continue
+# Prepare QuestPlus staircases or fall back to fixed list
 
-    # reward on correct trials
-    if results["correct"] == 1:
-        give_reward()
-        el_tracker.sendMessage('reward_given')
-        n_correct_in_a_row += 1
-    else:
-        el_tracker.sendMessage('no_reward')
-        n_correct_in_a_row = 0
+if use_qp:
+    speeds = list(task_params.get('rdk_speeds', [25]))
+    coh_grid = qp_cfg.get('intensity_values')
+    if not coh_grid:
+        coh_grid = task_params.get('coherence_levels', [0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
+    # Ensure sorted unique and within [0,1]
+    try:
+        coh_grid = sorted({float(c) for c in coh_grid if c is not None and 0.0 <= float(c) <= 1.0})
+    except Exception:
+        coh_grid = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
 
-    # Change mode automatically if 5 correct in a row
-    trial_history.append(results)
+    qp_handlers = []
+    for spd in speeds:
+        qp = QuestPlusHandler(
+            nTrials=int(qp_cfg.get('n_trials_per_speed', 60)),
+            intensityVals=coh_grid,
+            thresholdVals=qp_cfg.get('threshold_vals', [0.05, 0.1, 0.2, 0.4, 0.8]),
+            slopeVals=qp_cfg.get('slope_vals', [2.5, 3.5, 5.0]),
+            lowerAsymptoteVals=qp_cfg.get('lower_asymptote_vals', [0.05]),
+            lapseRateVals=qp_cfg.get('lapse_rate_vals', [0.02]),
+            responseVals=['Correct', 'Incorrect'],
+            startIntensity=None,
+            psychometricFunc=qp_cfg.get('psychometric_func', 'weibull'),
+            stimScale=qp_cfg.get('stim_scale', 'linear'),
+            stimSelectionMethod=qp_cfg.get('selection_method', 'minEntropy'),
+            stimSelectionOptions=qp_cfg.get('selection_options', {'N': 1, 'maxConsecutiveReps': 2}),
+            paramEstimationMethod=qp_cfg.get('param_estimation', 'mean'),
+            name=f'QP_speed_{spd}'
+        )
+        qp_handlers.append({'speed': float(spd), 'qp': qp, 'trials_done': 0})
 
-    # Plot summary
-    n_trials = len(trial_history)
-    n_correct = sum(1 for t in trial_history if t['correct'] == 1)
-    percent_correct = 100 * n_correct / n_trials if n_trials > 0 else 0
-    # find how many correct trials in a row
-    n_correct_in_a_row_total = 0
-    for t in reversed(trial_history):
-        if t['correct'] == 1:
-            n_correct_in_a_row_total += 1
+    # Alternate vs random direction policy
+    dir_policy = str(qp_cfg.get('direction_policy', 'random')).lower()
+    _dir_state = {'last': None}
+
+    def pick_direction():
+        dirs = task_params.get('directions', [90, 270])
+        if dir_policy == 'alternate':
+            if _dir_state['last'] is None:
+                _dir_state['last'] = int(np.random.choice(dirs))
+            else:
+                _dir_state['last'] = dirs[1] if dirs[0] == _dir_state['last'] else dirs[0]
+            return int(_dir_state['last'])
         else:
-            break
+            d = int(np.random.choice(dirs))
+            _dir_state['last'] = d
+            return d
 
-    # compact status message (split to avoid overly long line)
-    # print(f"RT: {results['saccade_rt']}, rewarded: {results['correct']}, ")
-    # print(
-    #     f"Consecutive correct: {n_correct_in_a_row_total}, "
-    #     f"Total correct: {n_correct}, Percent: {percent_correct:.2f}%"
-    # )
+    # Interleave across staircases round-robin
+    active = True
+    q_summary = []
+    trial_index = 1
+    mib_thr = float(qp_cfg.get('mib_success_threshold_dva', 1.0))
 
-    # Plot
-    update_plots(trial_history)
+    while active:
+        active = False
+        for entry in qp_handlers:
+            qp = entry['qp']
+            if qp.finished:
+                continue
+            active = True
+            # Next coherence from this staircase
+            try:
+                coherence = float(next(qp))
+            except StopIteration:
+                continue
+            direction = pick_direction()
+            speed = float(entry['speed'])
+            cond = {"speed": speed, "coherence": coherence, "direction": direction}
 
-    # Next trial
-    trial_index += 1
-    core.wait(task_params["inter_trial_interval"] / 1000.0)
+            # Run one trial
+            results = run_trial(cond, trial_index, stim_params, task_params, trial_history)
+
+            # If paused, show menu and retry same staircase later
+            if results is None:
+                choice = pause_menu(el_tracker)
+                if choice is None:
+                    terminate_task(trial_history)
+                # do not advance qp or index; continue loop
+                continue
+
+            # Determine QUEST+ response based on MIB success
+            is_success = mib_success_for_qp(results, direction=direction, threshold_dva=mib_thr)
+            qp.addResponse('Correct' if is_success else 'Incorrect', intensity=coherence)
+            entry['trials_done'] += 1
+
+            # reward on correct landings (task's existing criterion)
+            if results.get("correct", 0) == 1:
+                give_reward()
+                el_tracker.sendMessage('reward_given')
+            else:
+                el_tracker.sendMessage('no_reward')
+
+            # augment log with QUEST fields
+            results["q_speed"] = speed
+            results["q_intensity_coherence"] = coherence
+            results["q_direction"] = direction
+            results["q_mib_success"] = int(is_success)
+
+            trial_history.append(results)
+
+            # Update plots
+            update_plots(trial_history)
+
+            trial_index += 1
+            core.wait(task_params["inter_trial_interval"] / 1000.0)
+
+    # Collect QUEST parameter estimates
+    for entry in qp_handlers:
+        est = entry['qp'].paramEstimate
+        q_summary.append({
+            'speed': entry['speed'],
+            'threshold_estimate': est.get('threshold', np.nan),
+            'slope_estimate': est.get('slope', np.nan),
+            'lower_asymptote': est.get('lowerAsymptote', np.nan) if 'lowerAsymptote' in est else np.nan,
+            'lapse_rate': est.get('lapseRate', np.nan) if 'lapseRate' in est else np.nan,
+            'n_trials': entry['trials_done']
+        })
+
+    # Save QUEST summary to disk
+    try:
+        qdf = pd.DataFrame(q_summary)
+        qdf.to_csv(data_dir / 'questplus_summary.csv', index=False)
+    except Exception as e:
+        print('Warning: failed to save questplus summary:', e)
+
+else:
+    # Fallback: original fixed-factor design
+    all_trials = []
+    for speed in task_params["rdk_speeds"]:
+        for coherence in task_params["coherence_levels"]:
+            for direction in task_params["directions"]:
+                all_trials.append({
+                    "speed": speed,
+                    "coherence": coherence,
+                    "direction": direction,
+                })
+
+    all_trials = all_trials * task_params.get("n_trials_per_condition", 10)
+    np.random.shuffle(all_trials)
+
+    n_correct_in_a_row = 0
+    for trial_index, trial_conditions in enumerate(all_trials, start=1):
+
+        # Run trial
+        results = run_trial(trial_conditions, trial_index, stim_params, task_params, trial_history)
+
+        # if the trial was aborted (None), show pause menu to pick next mode
+        if results is None:
+            choice = pause_menu(el_tracker)
+            if choice is None:
+                terminate_task(trial_history)
+            continue
+
+        # reward on correct trials
+        if results["correct"] == 1:
+            give_reward()
+            el_tracker.sendMessage('reward_given')
+            n_correct_in_a_row += 1
+        else:
+            el_tracker.sendMessage('no_reward')
+            n_correct_in_a_row = 0
+
+        # Change mode automatically if 5 correct in a row
+        trial_history.append(results)
+
+        # Plot summary
+        n_trials = len(trial_history)
+        n_correct = sum(1 for t in trial_history if t['correct'] == 1)
+        percent_correct = 100 * n_correct / n_trials if n_trials > 0 else 0
+        # find how many correct trials in a row
+        n_correct_in_a_row_total = 0
+        for t in reversed(trial_history):
+            if t['correct'] == 1:
+                n_correct_in_a_row_total += 1
+            else:
+                break
+
+        # compact status message (split to avoid overly long line)
+        # print(f"RT: {results['saccade_rt']}, rewarded: {results['correct']}, ")
+        # print(
+        #     f"Consecutive correct: {n_correct_in_a_row_total}, "
+        #     f"Total correct: {n_correct}, Percent: {percent_correct:.2f}%"
+        # )
+
+        # Plot
+        update_plots(trial_history)
+
+        # Next trial
+        trial_index += 1
+        core.wait(task_params["inter_trial_interval"] / 1000.0)
 
 # Step 6: disconnect, download the EDF file, then terminate the task
 terminate_task(trial_history)

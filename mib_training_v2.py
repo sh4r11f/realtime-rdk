@@ -961,6 +961,169 @@ def acquire_fixation(el_tracker, timeout_s=3.0, hold_time_s=0.05, blink_interval
     return False
 
 
+def drawFixation(fix, colour):
+    """ Send a command to draw a cross or filled box on the tracker screen
+
+    Draw a cross or a filled box representing a fixation or 'fixation update'
+    event on the tracker display.
+
+    Parameters:
+    fix: a two or four-element tuple to be interpreted as follows:
+        if 'fix' contains two elements a cross is requested.
+            Interpret as fix[0]=x, fix[1]=y
+        if  'fix' contains four elements a filled box is requested.
+            Interpret as fix[0]=left, fix[1]=top, fix[2]=width, fix[3]=height
+    colour: numerical value from 0 to 15 to represent the colour of the target
+    """
+
+    # get the currently active tracker object (connection)
+    el_tracker = pylink.getEYELINK()
+
+    err = "drawFixation expects a 2- or 4-element tuple\n"
+
+    if len(fix) == 2:
+        el_tracker.drawCross(fix[0], fix[1], colour)
+
+        # alternative solution: user the draw_cross Host command
+        # el_tracker.sendCommand("*draw_cross %d %d %d" % \
+        #                        (int(fix[0]), int(fix[1]), colour))
+
+    elif len(fix) == 4:
+        el_tracker.drawFilledBox(fix[0], fix[1], fix[2], fix[3], colour)
+
+        # alternative solution: user the draw_fill_box Host command
+        # cmd_pars = (int(fix[0] - fix[2]), int(fix[1] - fix[3]),
+        #             int(fix[0] + fix[2]), int(fix[1] + fix[3]), colour)
+        # el_tracker.sendCommand("*draw_filled_box %d %d %d %d %d" % cmd_pars)
+
+    # if 'fix' has other number of elements, give a warning message
+    else:
+        print(err)
+
+
+def drawSaccade(sacc, colour):
+    """ Draw a line representing a saccade on the tracker display
+
+    Parameters:
+    sacc: a four-element tuple to be interpreted as
+        sacc[0] = x1, sacc[1] = y1, sacc[2] = x2, sacc[3] = y2
+    colour: numerical value from 0 to 15 to represent the colour of the target
+    """
+
+    # get the currently active tracker object (connection)
+    el_tracker = pylink.getEYELINK()
+
+    err = "drawSaccade expects a four-element tuple for its first argument\n"
+
+    if len(sacc) == 4:
+        draw_pars = (int(sacc[0]), int(sacc[1]),
+                     int(sacc[2]), int(sacc[3]), colour)
+        el_tracker.sendCommand("*draw_line %d %d %d %d %d" % draw_pars)
+
+    # if 'sacc' has other number of elements, give a warning message
+    else:
+        print(err)
+
+
+def check_eye_events(el_tracker, eye_used=0, event_of_interest=None):
+    """Check for eye events (saccades, blinks) from the EyeLink tracker.
+
+    """
+    # now we consume and process the events and samples that are in the
+    # link data queue until there are no more left.
+    color_white = 15
+    gaze = None
+    amp = None
+    start_time = None
+    while True:
+        ltype = el_tracker.getNextData()
+        # if there are no more link data items, we have nothing more to
+        # consume and we can do other things until we get it.
+        if not ltype:
+            break
+
+        # there is link data to be processed,
+        # let's see if it's something we need to look at
+        if ltype == pylink.FIXUPDATE and event_of_interest == 'fixupdate':
+            # record to EDF the arrival of a fixation update event
+            el_tracker.sendMessage("fixUpdate")
+            # fetch fixation update event then update the target position
+            # according to the retrieved gaze coordinates but only if the
+            # data corresponds to the eye being tracked
+            ldata = el_tracker.getFloatData()
+            if ldata.getEye() == eye_used:
+                gaze = ldata.getAverageGaze()
+                drawFixation((gaze[0], gaze[1]), color_white)
+
+        elif ltype == pylink.STARTFIX and event_of_interest == 'fixstart':
+            # record to EDF the arrival of a fixation start event
+            el_tracker.sendMessage("fixStart")
+            # fetch fixation start event then increment count of similar
+            # but only if the data was from to the eye being tracked
+            ldata = el_tracker.getFloatData()
+            if ldata.getEye() == eye_used:
+                gaze = ldata.getStartGaze()
+
+        elif ltype == pylink.ENDFIX and event_of_interest == 'fixend':
+            # record to EDF the arrival of a fixation end event
+            el_tracker.sendMessage("fixEnd")
+            # fetch fixation end event then update the target position
+            # according to the retrieved gaze coordinates but only if the
+            # data is from the eye being tracked
+            ldata = el_tracker.getFloatData()
+            if ldata.getEye() == eye_used:
+                gaze = ldata.getAverageGaze()
+
+        # elif ltype == pylink.STARTSACC and event_of_interest == 'saccade':
+        #     # record to EDF the arrival of a saccade start event
+        #     el_tracker.sendMessage("saccStart")
+        #     # we fetch saccade start event then update the target position
+        #     # but only if the data was from the eye being tracked
+        #     ldata = el_tracker.getFloatData()
+        #     if ldata.getEye() == eye_used:
+        #         if sample:
+        #             # update target position to match the coordinates of
+        #             # the last sample we've encountered if available.
+        #             # Saccade start events do not store gaze coordinates
+        #             # unless link_event_data is set to include NOSTART
+        #             sacc = (sample[0], sample[1], 0, 0)
+        #             sacc_start_counter = sacc_start_counter + 1
+
+        elif ltype == pylink.ENDSACC and event_of_interest == 'saccend':
+            # record to EDF the arrival of a saccade end event
+            el_tracker.sendMessage("saccEnd")
+            # fetch saccade end event then update the target position
+            # according to the retrieved gaze coordinates but only if the
+            # data was from the eye being tracked
+            ldata = el_tracker.getFloatData()
+            if ldata.getEye() == eye_used:
+                gazeEnd = ldata.getEndGaze()
+                gazeStart = ldata.getStartGaze()
+                sacc = (gazeStart[0], gazeStart[1], gazeEnd[0], gazeEnd[1])
+                drawSaccade(sacc, color_white)
+                gaze = gazeEnd
+                amp = ldata.getAmplitude()
+                start_time = ldata.getStartTime()
+
+        # blink events
+        elif ltype == pylink.STARTBLINK and event_of_interest == 'blinkstart':
+            # record to EDF the arrival of a blink start event
+            el_tracker.sendMessage("blinkStart")
+            # fetch blink start event then increment count of similar
+            # but only if the data was from to the eye being tracked
+            ldata = el_tracker.getFloatData()
+            gaze = None
+
+        else:
+            pass
+
+    return {
+        'gaze': gaze,
+        "amplitude": amp,
+        "start_time": start_time,
+    }
+
+
 def run_trial(condition, trial_index, stim_params, task_params, history):
     """Run a single RDK trial.
 
@@ -1167,6 +1330,7 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
     # Setup trial data record
     trial_data = {
         "trial_index": trial_index,
+        "trial_start_time": time.time(),
         "speed": condition["speed"],
         "coherence": condition["coherence"],
         "direction": condition["direction"],
@@ -1185,7 +1349,7 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
         # in dummy mode, just wait a moment and assume fixation acquired
         time.sleep(0.5)
         fix_acquired = True
-    
+
     start_t = time.time()
     blink_start = time.time()
     hold_start = None
@@ -1256,6 +1420,8 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
             if keycode == 'r':
                 give_reward()
                 logging.info(f"Manual reward given on trial {trial_index}")
+                abort_trial()
+                return trial_data
 
         # Try to get newest sample from EyeLink
         if simulation_mode:
@@ -1263,42 +1429,19 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
                 # in simulation mode, just wait 0.5 seconds and assume fixation acquired
                 fix_acquired = True
                 break
-
-        try:
-            sample = el_tracker.getNewestSample()
-        except Exception:
-            sample = None
-
-        gx = gy = None
-        gaze_center_x = gaze_center_y = None
-
-        if sample is not None:
-            try:
-                gaze = sample.getLeftEye().getGaze()
-                if gaze is not None:
-                    gx, gy = gaze
-            except Exception:
-                try:
-                    gx = sample.gx
-                    gy = sample.gy
-                except Exception:
-                    gx = gy = None
-
-        if (gx is not None) and (gy is not None):
-            gaze_center_x = gx - cx
-            gaze_center_y = gy - cy
         else:
-            gaze_center_x = gaze_center_y = None
+            eye_data = check_eye_events(el_tracker, eye_used, event_of_interest='fixstart')
+            gx, gy = eye_data["gaze"] if eye_data["gaze"] is not None else (None, None)
+            if (gx is not None) and (gy is not None):
+                gaze_center_x = gx - cx
+                gaze_center_y = gy - cy
+            else:
+                gaze_center_x = gaze_center_y = None
 
-        if (gaze_center_x is not None) and (gaze_center_y is not None):
-            if (gaze_center_x * gaze_center_x + gaze_center_y * gaze_center_y) <= (fix_tol_px * fix_tol_px):
-                if hold_start is None:
-                    hold_start = time.time()
-                elif (time.time() - hold_start) >= fix_hold_time:
+            if (gaze_center_x is not None) and (gaze_center_y is not None):
+                if np.hypot(gaze_center_x, gaze_center_y) <= fix_tol_px:
                     fix_acquired = True
                     break
-            else:
-                hold_start = None
 
         # Small delay to prevent tight spin
         pylink.pumpDelay(10)
@@ -1321,7 +1464,7 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
 
     fix_start_t = time.time()
     while time.time() - fix_start_t < fix_dur and fixated:
-        
+
         # Abort the current trial if the tracker is no longer recording
         error = el_tracker.isRecording()
         if error is not pylink.TRIAL_OK:
@@ -1385,35 +1528,9 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
                 # in simulation mode, just wait 0.5 seconds and assume fixation acquired
                 fixated = True
                 break
-
-        try:
-            sample = el_tracker.getNewestSample()
-        except Exception:
-            sample = None
-
-        gx = gy = None
-        gaze_center_x = gaze_center_y = None
-
-        if sample is not None:
-            try:
-                gaze = sample.getLeftEye().getGaze()
-                if gaze is not None:
-                    gx, gy = gaze
-            except Exception:
-                try:
-                    gx = sample.gx
-                    gy = sample.gy
-                except Exception:
-                    gx = gy = None
-
-        if (gx is not None) and (gy is not None):
-            gaze_center_x = gx - cx
-            gaze_center_y = gy - cy
         else:
-            gaze_center_x = gaze_center_y = None
-
-        if (gaze_center_x is not None) and (gaze_center_y is not None):
-            if (gaze_center_x * gaze_center_x + gaze_center_y * gaze_center_y) > (fix_tol_px * fix_tol_px):
+            eye_data = check_eye_events(el_tracker, eye_used, event_of_interest='fixend')
+            if eye_data["gaze"] is not None:
                 fixated = False
                 break
 
@@ -1433,9 +1550,8 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
     sac_init_dur = task_params["saccade_initiation_duration"] / 1000.0
     got_sac = False
     stim_onset = None
-    
     start_t = time.time()
-    
+
     # Loop until saccade_window elapsed
     while time.time() - start_t < sac_init_dur and not got_sac:
 
@@ -1490,7 +1606,7 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
             if keycode == 'r':
                 give_reward()
                 logging.info(f"Manual reward given on trial {trial_index}")
-        
+
         # Draw Gaussian-masked RDK
         rdk.draw()
         win.flip()
@@ -1504,6 +1620,21 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
                 got_sac = True
                 trial_data["saccade_rt"] = np.random.normal(250, 50)  # dummy value
                 break
+        else:
+            eye_data = check_eye_events(el_tracker, eye_used, event_of_interest='saccade')
+            if eye_data["gaze"] is not None:
+                gx, gy = eye_data["gaze"]
+                gaze_center_x = gx - cx
+                gaze_center_y = -gy + cy
+            else:
+                gaze_center_x = gaze_center_y = None
+
+            if (gaze_center_x is not None) and (gaze_center_y is not None):
+                if np.hypot(gaze_center_x, gaze_center_y) > fix_tol_px:
+                    got_sac = True
+                    trial_data["saccade_rt"] = (time.time() - stim_onset) * 1000.0  # in ms
+                    break
+            
 
         try:
             sample = el_tracker.getNewestSample()
