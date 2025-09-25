@@ -22,7 +22,6 @@ from pathlib import Path
 import os
 from datetime import date
 import sys
-import yaml
 import csv
 import time
 
@@ -32,13 +31,12 @@ import pandas as pd
 import pylink
 from EyeLinkCoreGraphicsPsychoPy import EyeLinkCoreGraphicsPsychoPy
 from psychopy import visual, core, event, monitors, logging, gui
-from psychopy.tools.monitorunittools import deg2pix, pix2deg
+from psychopy.tools.monitorunittools import deg2pix
 
 import nidaqmx
 from nidaqmx.constants import VoltageUnits, AcquisitionType
 
-import matplotlib.pyplot as plt
-import seaborn as sns
+# plotting handled by src.plotting.TrialPlotter
 
 # Switch to the script folder
 root = Path(__file__).parent.resolve()
@@ -48,8 +46,12 @@ src_dir = root / 'src'
 if str(src_dir) not in sys.path:
     sys.path.append(str(src_dir))
 
-from src.rdk import GaussianRDK
-from src.utils import load_yaml
+from src.experiment import clear_screen, show_msg  # noqa: E402 - after sys.path adjustment
+from src.eyetracker import MyeLink  # noqa: E402 - after sys.path adjustment
+from src.rdk import GaussianRDK  # noqa: E402 - after sys.path adjustment
+from src.utils import load_yaml  # noqa: E402 - after sys.path adjustment
+from src.plotting import TrialPlotter  # noqa: E402 - after sys.path adjustment
+
 
 # Get info from the gui interface
 today = date.today().strftime("%Y_%m_%d")
@@ -72,7 +74,7 @@ if dlg.OK:  # if ok_data is not None
     ses_id = int(ok_data[3])
     debug = bool(ok_data[4])
 else:
-    print('user cancelled')
+    print('User cancelled!')
     core.quit()
 
 # Directories
@@ -113,69 +115,14 @@ logging.console.setLevel(logging.CRITICAL)
 logging.LogFile(log_file, level=logging.INFO, filemode='w')
 logging.setDefaultClock(clock)
 
-# Connect to EyeLink Tracker
-if debug:
-    el_tracker = pylink.EyeLink(None)
-else:
-    try:
-        el_tracker = pylink.EyeLink("100.1.1.1")
-    except RuntimeError as error:
-        logging.log(level=logging.ERROR, msg=f"Failed to connect to EyeLink Tracker: {error}")
-        core.quit()
-
-# Open an EDF data file on the Host PC
-try:
-    el_tracker.openDataFile(str(host_edf))
-except RuntimeError as err:
-    logging.log(level=logging.ERROR, msg=f"Failed to open EDF file on Host PC: {err}")
-    # close the link if we have one open
-    if el_tracker.isConnected():
-        el_tracker.close()
-    core.quit()
-
-# Add a header text to the EDF file to identify the current experiment name
-try:
-    el_tracker.sendCommand("add_file_preamble_text 'RECORDED BY RDK'")
-except RuntimeError as e:
-    logging.log(level=logging.ERROR, msg=f"Failed to add preamble text to EDF file: {e}")
-
-# Put the tracker in offline mode before we change tracking parameters
-el_tracker.setOfflineMode()
-
-# Get the software version:  1-EyeLink I, 2-EyeLink II, 3/4-EyeLink 1000,
-# 5-EyeLink 1000 Plus, 6-Portable DUO
-eyelink_ver = 0  # set version to 0, in case running in Dummy mode
-if not debug:
-    vstr = el_tracker.getTrackerVersionString()
-    eyelink_ver = int(vstr.split()[-1].split('.')[0])
-    # print out some version info in the shell
-    print('Running experiment on %s, version %d' % (vstr, eyelink_ver))
-
-# File and Link data control
-# what eye events to save in the EDF file, include everything by default
-file_event_flags = 'LEFT,RIGHT,FIXATION,SACCADE,BLINK,MESSAGE,BUTTON,INPUT'
-# what eye events to make available over the link, include everything by default
-link_event_flags = 'LEFT,RIGHT,FIXATION,SACCADE,BLINK,BUTTON,FIXUPDATE,INPUT'
-# what sample data to save in the EDF data file and to make available
-# over the link, include the 'HTARGET' flag to save head target sticker
-# data for supported eye trackers
-if eyelink_ver > 3:
-    file_sample_flags = 'LEFT,RIGHT,GAZE,HREF,RAW,AREA,HTARGET,GAZERES,BUTTON,STATUS,INPUT'
-    link_sample_flags = 'LEFT,RIGHT,GAZE,GAZERES,AREA,HTARGET,STATUS,INPUT'
-else:
-    file_sample_flags = 'LEFT,RIGHT,GAZE,HREF,RAW,AREA,GAZERES,BUTTON,STATUS,INPUT'
-    link_sample_flags = 'LEFT,RIGHT,GAZE,GAZERES,AREA,STATUS,INPUT'
-el_tracker.sendCommand("file_event_filter = %s" % file_event_flags)
-el_tracker.sendCommand("file_sample_data = %s" % file_sample_flags)
-el_tracker.sendCommand("link_event_filter = %s" % link_event_flags)
-el_tracker.sendCommand("link_sample_data = %s" % link_sample_flags)
-
-# Optional tracking parameters
-# Sample rate, 250, 500, 1000, or 2000, check your tracker specification
-if eyelink_ver > 2:
-    el_tracker.sendCommand("sample_rate 1000")
-# Choose a calibration type, H3, HV3, HV5, HV13 (HV = horizontal/vertical),
-el_tracker.sendCommand("calibration_type = HV5")
+# Define eyetracker interface
+el_interface = MyeLink(config=eyetracker_params, debug=debug)
+el_interface.connect()
+el_interface.open_data_file(edf_filename=host_edf)
+el_interface.add_preamble_text(f"RECORDED BY {task_name}")
+el_interface.offline()
+eyelink_version = el_interface.check_version()
+el_interface.setup_data_filters()
 
 # Monitor and window
 screen_num = 1 if not debug else 0  # use the external display in non-debug mode
@@ -208,13 +155,13 @@ win = visual.Window(
 # Pass the display pixel coordinates (left, top, right, bottom) to the tracker
 # see the EyeLink Installation Guide, "Customizing Screen Settings"
 scn_width, scn_height = mon_params['resolution']
-el_coords = "screen_pixel_coords = 0 0 %d %d" % (scn_width - 1, scn_height - 1)
+el_coords = f"screen_pixel_coords = 0 0 {scn_width - 1} {scn_height - 1}"
 el_tracker.sendCommand(el_coords)
 
 # Write a DISPLAY_COORDS message to the EDF file
 # Data Viewer needs this piece of info for proper visualization, see Data
 # Viewer User Manual, "Protocol for EyeLink Data to Viewer Integration"
-dv_coords = "DISPLAY_COORDS  0 0 %d %d" % (scn_width - 1, scn_height - 1)
+dv_coords = f"DISPLAY_COORDS  0 0 {scn_width - 1} {scn_height - 1}"
 el_tracker.sendMessage(dv_coords)
 
 # Keep calibration/validation targets closer to the center
@@ -242,7 +189,7 @@ genv.setCalibrationColors(eyetracker_params['foreground_color'], eyetracker_para
 genv.setTargetType('picture')
 calib_images = list(np.random.choice(calib_img_files, int(eyetracker_params["calibration_type"][-1]), replace=False))
 genv.setPictureTarget(calib_images)
-genv.setTargetSize(int(eyetracker_params['target_size']))
+genv.setTargetSize(int(deg2pix(eyetracker_params['target_size'], monitor=mon)))
 
 # Beeps to play during calibration, validation and drift correction
 genv.setCalibrationSounds(
@@ -254,311 +201,16 @@ genv.setCalibrationSounds(
 # Request Pylink to use the PsychoPy window we opened above for calibration
 pylink.openGraphicsEx(genv)
 
-# Plotting
-plt.ion()  # interactive mode on
+# Initialize plotter for real-time updates
+plotter = TrialPlotter(
+    monitor=mon,
+    subject=sub_id,
+    session=ses_id,
+    run_date=date.today().strftime('%Y-%m-%d'),
+    config=plotting_params,
+)
 
-_plot_fig = None
-_plot_axes = None
-
-
-def update_plots(history):
-    """Update a persistent non-blocking figure with recent trial history."""
-    global _plot_fig, _plot_axes
-    if len(history) == 0:
-        return
-
-    # Plotting style
-    sns.set_style("ticks")
-    sns.despine()
-    sns.set_context("poster", font_scale=0.6)
-
-    # Convert history to DataFrame for easier plotting
-    df = pd.DataFrame(history)
-    df["direction_name"] = df["direction"].map({90: 'Up', 270: 'Down'})
-    df["speed_dva_per_sec"] = df["speed"].apply(lambda x: x * 100)  # dva/frame to dva/s
-    df["saccade_y_dva"] = df["saccade_y"].apply(lambda y: pix2deg(y, monitor=mon))
-    df["saccade_x_dva"] = df["saccade_x"].apply(lambda x: pix2deg(x, monitor=mon))
-    df["stim_x_dva"] = df["stim_x"].apply(lambda x: pix2deg(x, monitor=mon))
-    df["stim_y_dva"] = df["stim_y"].apply(lambda y: pix2deg(y, monitor=mon))
-
-    # create figure once or recreate if closed
-    if _plot_fig is None or not plt.fignum_exists(_plot_fig.number):
-        _plot_fig, _plot_axes = plt.subplots(3, 3, figsize=(24, 24))
-        try:
-            _plot_fig.canvas.manager.set_window_title('Trial Summary')
-        except Exception:
-            pass  # backend may not support setting window title
-
-    axs = _plot_axes
-    # clear axes and redraw
-    for row in axs:
-        for ax in row:
-            ax.clear()
-
-    # Session title
-    _plot_fig.suptitle(f"Subject: {sub_id}, Session: {ses_id}, Date: {date.today().strftime('%Y-%m-%d')}", fontsize=16)
-
-    # Correct/Incorrect count (use trial_index for x but keep readable by showing only last N trials)
-    last_n_trials = 20
-    sns.countplot(
-        x='trial_index',
-        hue='correct',
-        data=df.tail(last_n_trials),
-        palette={0: "red", 1: "green"},
-        ax=axs[0, 0]
-    )
-    axs[0, 0].set_title(f"Correct/Incorrect Trials (Last {last_n_trials} Trials)")
-    axs[0, 0].set_xlabel("Trial")
-    axs[0, 0].set_ylabel("Success")
-    axs[0, 0].legend(title="Correct", loc="upper right", labels=["No", "Yes"])
-
-    # Percent correct overall (lineplot with percent correct based on trial mode as a function of trial index)
-    df['percent_correct'] = (
-        df['correct']
-        .cumsum() / df["correct"].count() * 100
-    )
-    sns.lineplot(x='trial_index', y='percent_correct', data=df, ax=axs[0, 1])
-    axs[0, 1].set_title(f"Total correct {df['correct'].sum()} / {df['correct'].count()} trials | Total reward {df['correct'].sum() * 0.25:.2f} ml")
-    axs[0, 1].set_xlabel("Trial")
-    axs[0, 1].set_ylabel("Percent correct")
-    axs[0, 1].set_ylim(0, 100)
-    axs[0, 1].axhline(50, ls='--', color='gray')  # chance performance line
-    axs[0, 1].axhline(100, ls='--', color='black')  # chance performance line
-
-    # Plot coherence by direction and speed
-    valid = (
-        df['saccade_y'].notna() &
-        (df['saccade_y'] != -1) &
-        df['direction'].isin([90, 270])
-    )
-    if valid.sum() == 0:
-        axs[0, 2].text(0.5, 0.5, "No saccade data yet", ha='center', va='center')
-    else:
-        tmp = df[valid].copy()
-        tmp['signed_y'] = np.where(tmp['direction'] == 90, tmp['saccade_y_dva'], -tmp['saccade_y_dva'])
-        sns.barplot(
-            data=tmp,
-            x='coherence',
-            y='signed_y',
-            hue='speed_dva_per_sec',
-            estimator=np.mean,
-            errorbar='se',
-            palette='muted',
-            ax=axs[0, 2]
-        )
-        axs[0, 2].axhline(0, ls='--', color='gray', zorder=0)
-        axs[0, 2].set_xlabel('Coherence')
-        axs[0, 2].set_ylabel('Saccade Y (≈ Up - Down), dva')
-        axs[0, 2].set_title('Saccade offset by Coherence and Speed')
-
-    # Reaction time (saccade latency) distribution
-    # keep original df for other panels, filter into rt_df for the histogram
-    rt_df = df[df["saccade_rt"] > 0]  # filter out invalid latencies
-    if rt_df.shape[0] == 0:
-        axs[1, 0].text(0.5, 0.5, "No valid reaction times", ha='center', va='center')
-        axs[1, 0].set_title("Saccade Latency Distribution")
-        axs[1, 0].set_xlabel("Saccade Latency (ms)")
-        axs[1, 0].set_ylabel("Count")
-    else:
-        # seaborn's KDE requires multiple observations; try KDE and fall back to no KDE on failure
-        try:
-            sns.histplot(data=rt_df, x='saccade_rt', hue='direction_name', bins=20, kde=True, ax=axs[1, 0])
-        except ValueError:
-            sns.histplot(data=rt_df, x='saccade_rt', hue='direction_name', bins=20, kde=False, ax=axs[1, 0])
-    axs[1, 0].set_title("Saccade RT Distribution")
-    axs[1, 0].set_xlabel("RT (ms)")
-    axs[1, 0].set_ylabel("Count")
-    # Only show legend if there are labeled artists (avoids UserWarning)
-    handles, labels = axs[1, 0].get_legend_handles_labels()
-    if labels:
-        axs[1, 0].legend(title="Direction", loc="upper right")
-
-    # Saccade landing position scatter
-    land_df = df[(df["correct"] == 1) & (df["coherence"] == 1)].copy()
-    # ensure the column exists if history was created differently
-    if "direction_name" not in land_df.columns and "direction" in land_df.columns:
-        land_df["direction_name"] = land_df["direction"].map({90: 'Up', 270: 'Down'})
-
-    if land_df.shape[0] == 0:
-        axs[1, 1].text(0.5, 0.5, "No valid saccades", ha='center', va='center')
-        axs[1, 1].set_title("Saccade Landing Positions")
-        axs[1, 1].set_xlabel("X Position (dva)")
-        axs[1, 1].set_ylabel("Y Position (dva)")
-        axs[1, 1].axvline(0, ls='--', color='gray')
-        axs[1, 1].axhline(0, ls='--', color='gray')
-        axs[1, 1].set_aspect('equal', 'box')
-    else:
-        has_hue = "direction_name" in land_df.columns and land_df["direction_name"].notna().any()
-        if has_hue:
-            sns.scatterplot(
-                x='saccade_x_dva', y='saccade_y_dva',
-                hue='direction_name', data=land_df, ax=axs[1, 1],
-                palette="Set1", s=100
-            )
-        else:
-            # plot without hue to avoid seaborn's palette warning
-            sns.scatterplot(
-                x='saccade_x_dva', y='saccade_y_dva',
-                data=land_df, ax=axs[1, 1], color='C0', s=100
-            )
-
-        axs[1, 1].scatter(0, 0, s=200, c='black', marker='+', zorder=5)
-        axs[1, 1].scatter(x=land_df['stim_x_dva'], y=land_df['stim_y_dva'], s=500, c='gray', marker='o', zorder=4)
-        axs[1, 1].set_title("Saccade Landing Positions")
-        axs[1, 1].set_xlabel("X Position (dva)")
-        axs[1, 1].set_ylabel("Y Position (dva)")
-        axs[1, 1].axvline(0, ls='--', color='gray')
-        axs[1, 1].axhline(0, ls='--', color='gray')
-        axs[1, 1].set_aspect('equal', 'box')
-
-        # Legend handling (only add if we have labels; safely remove if present)
-        handles, labels = axs[1, 1].get_legend_handles_labels()
-        if has_hue and len(labels) > 0:
-            axs[1, 1].legend(title="Direction", loc="upper right")
-        else:
-            if axs[1, 1].legend_ is not None:
-                axs[1, 1].legend_.remove()
-
-    # MIB distribution: number of saccades as a function of the angle
-    # of saccade vector in a bar plot, separated by color for direction
-    if land_df.shape[0] == 0:
-        axs[1, 2].text(0.5, 0.5, "No valid saccades", ha='center', va='center')
-        axs[1, 2].set_title("MIB Distribution")
-        axs[1, 2].set_xlabel("Saccade Angle (degrees)")
-        axs[1, 2].set_ylabel("Count")
-    else:
-        # compute saccade angle in degrees (0-360, 0=right, 90=up, 180=left, 270=down)
-        land_df['saccade_angle'] = (np.degrees(np.arctan2(-land_df['saccade_y_dva'], land_df['saccade_x_dva'])) + 360) % 360
-        sns.histplot(data=land_df, x='saccade_angle', hue='direction_name', bins=20, kde=False, ax=axs[1, 2], palette="Set1")
-        axs[1, 2].set_title("MIB Distribution")
-        axs[1, 2].set_xlabel("Saccade Angle (degrees)")
-        axs[1, 2].set_ylabel("Count")
-        # Only show legend if there are labeled artists (avoid NoneType errors)
-        handles, labels = axs[1, 2].get_legend_handles_labels()
-        if labels:
-            axs[1, 2].legend(title="Direction", loc="upper right")
-        else:
-            if axs[1, 2].legend_ is not None:
-                axs[1, 2].legend_.remove()
-
-    # Reaction time split by speed
-    rt_df = df[df["saccade_rt"] > 0]  # filter out invalid latencies
-    if rt_df.shape[0] == 0:
-        axs[2, 0].text(0.5, 0.5, "No valid reaction times", ha='center', va='center')
-        axs[2, 0].set_title("Saccade Latency Distribution")
-        axs[2, 0].set_xlabel("Saccade Latency (ms)")
-        axs[2, 0].set_ylabel("Count")
-    else:
-        # seaborn's KDE requires multiple observations; try KDE and fall back to no KDE on failure
-        try:
-            sns.histplot(data=rt_df, x='saccade_rt', hue='speed_dva_per_sec', bins=20, kde=True, ax=axs[2, 0], palette="RdYlBu")
-        except ValueError:
-            sns.histplot(data=rt_df, x='saccade_rt', hue='speed_dva_per_sec', bins=20, kde=False, ax=axs[2, 0], palette="RdYlBu")
-    axs[2, 0].set_title("Saccade RT Distribution")
-    axs[2, 0].set_xlabel("RT (ms)")
-    axs[2, 0].set_ylabel("Count")
-    # Only show legend if there are labeled artists (avoids UserWarning)
-    handles, labels = axs[2, 0].get_legend_handles_labels()
-    if labels:
-        axs[2, 0].legend(title="Speed", loc="upper right")
-
-    # Plot saccade angle as a function of latency for correct trials with 100% coherence
-    angle_df = df[(df["correct"] == 1) & (df["coherence"] == 1) & (df["saccade_rt"] > 0)].copy()
-    angle_df['saccade_angle'] = (np.degrees(np.arctan2(-angle_df['saccade_y_dva'], angle_df['saccade_x_dva'])) + 360) % 360
-    if angle_df.shape[0] == 0:
-        axs[2, 1].text(0.5, 0.5, "No valid saccades", ha='center', va='center')
-        axs[2, 1].set_title("Saccade Angle vs. Latency")
-        axs[2, 1].set_xlabel("Saccade Latency (ms)")
-        axs[2, 1].set_ylabel("Saccade Angle (degrees)")
-    else:
-        sns.scatterplot(
-            x='saccade_rt', y='saccade_angle',
-            hue='direction_name', data=angle_df, ax=axs[2, 1],
-            palette="Set1", s=100
-        )
-        axs[2, 1].set_title("Saccade Angle vs. Latency")
-        axs[2, 1].set_xlabel("Saccade Latency (ms)")
-        axs[2, 1].set_ylabel("Saccade Angle (degrees)")
-        axs[2, 1].set_ylim(0, 360)
-        # Legend handling (only add if we have labels; safely remove if present)
-        handles, labels = axs[2, 1].get_legend_handles_labels()
-        if len(labels) > 0:
-            axs[2, 1].legend(title="Direction", loc="upper right")
-        else:
-            if axs[2, 1].legend_ is not None:
-                axs[2, 1].legend_.remove()
-
-    # Fit a Weibull function to MIB differences by coherence
-    mib_df = df[(df["correct"] == 1) & (df["saccade_rt"] > 0) & (df["saccade_y"].notna())].copy()
-    # get rid of outlier reaction times
-    # mib_df = mib_df["saccade_rt"] < (mib_df["saccade_rt"].mean() + 3 * mib_df["saccade_rt"].std())
-    # get difference of saccade y by direction
-    mib_df['saccade_y_signed'] = np.where(mib_df['direction'] == 90, mib_df['saccade_y_dva'], -mib_df['saccade_y_dva'])
-    psycho_df = mib_df.groupby('coherence').agg(
-        n_trials=('saccade_y_signed', 'count'),
-        mean_mib=('saccade_y_signed', 'mean'),
-        sem_mib=('saccade_y_signed', 'sem')
-    ).reset_index()
-    # only plot if we have at least 2 coherence levels with data
-    if psycho_df.shape[0] < 2:
-        axs[2, 2].text(0.5, 0.5, "Not enough data", ha='center', va='center')
-        axs[2, 2].set_title("MIB by Coherence")
-        axs[2, 2].set_xlabel("Coherence")
-        axs[2, 2].set_ylabel("MIB (saccade Y, dva)")
-    else:
-        sns.pointplot(
-            data=psycho_df,
-            x='coherence',
-            y='mean_mib',
-            yerr=psycho_df['sem_mib'],
-            color='C0',
-            ax=axs[2, 2]
-        )
-        axs[2, 2].axhline(0, ls='--', color='gray', zorder=0)
-        axs[2, 2].set_title("MIB by Coherence (correct trials)")
-        axs[2, 2].set_xlabel("Coherence")
-        axs[2, 2].set_ylabel("MIB (saccade Y, dva)")
-
-        # Fit a Weibull function if we have at least 3 unique coherence levels
-        if psycho_df['coherence'].nunique() >= 3:
-            from scipy.optimize import curve_fit
-
-            def weibull(x, alpha, beta, gamma, delta):
-                """Weibull function for psychometric fitting."""
-                return gamma + (1 - gamma - delta) * (1 - np.exp(-(x / alpha) ** beta))
-
-            try:
-                popt, _ = curve_fit(
-                    weibull,
-                    psycho_df['coherence'],
-                    psycho_df['mean_mib'],
-                    bounds=([0, 0, -np.inf, -np.inf], [np.inf, np.inf, np.inf, np.inf]),
-                    maxfev=10000
-                )
-                x_fit = np.linspace(psycho_df['coherence'].min(), psycho_df['coherence'].max(), 100)
-                y_fit = weibull(x_fit, *popt)
-                axs[2, 2].plot(x_fit, y_fit, 'r--', label='Weibull fit')
-                axs[2, 2].legend()
-                fit_text = f"Weibull fit:\nα={popt[0]:.2f}, β={popt[1]:.2f}\nγ={popt[2]:.2f}, δ={popt[3]:.2f}"
-                axs[2, 2].text(0.05, 0.95, fit_text, transform=axs[2, 2].transAxes,
-                               verticalalignment='top', fontsize=10,
-                               bbox=dict(boxstyle='round', facecolor='white', alpha=0.5))
-            except Exception as e:
-                print(f"Warning: failed to fit Weibull function: {e}")
-        else:
-            axs[2, 2].text(0.5, 0.5, "Not enough coherence levels to fit", ha='center', va='center')
-            axs[2, 2].set_title("MIB by Coherence")
-            axs[2, 2].set_xlabel("Coherence")
-            axs[2, 2].set_ylabel("MIB (saccade Y, dva)")
-            axs[2, 2].set_ylim(psycho_df['mean_mib'].min() - 1, psycho_df['mean_mib'].max() + 1)
-
-    plt.tight_layout()
-    # draw and allow GUI event loop to process without blocking
-    try:
-        _plot_fig.canvas.draw_idle()
-    except Exception:
-        _plot_fig.canvas.draw()
-    plt.pause(0.001)
+# (plotting moved into src/plotting.TrialPlotter)
 
 
 def give_reward(reward_voltage=5.0, duration_ms=200, pulses=2, inter_pulse_ms=200):
@@ -679,11 +331,12 @@ def terminate_task(history):
 
     # save final plot if it exists
     try:
-        if _plot_fig is not None and plt.fignum_exists(_plot_fig.number):
+        if plotter is not None and plotter.figure() is not None:
+            fig = plotter.figure()
             out_png = fig_dir / 'trial_summary.png'
             out_pdf = fig_dir / 'trial_summary.pdf'
-            _plot_fig.savefig(str(out_png), bbox_inches='tight', dpi=150)
-            _plot_fig.savefig(str(out_pdf), bbox_inches='tight', dpi=150)
+            fig.savefig(str(out_png), bbox_inches='tight', dpi=150)
+            fig.savefig(str(out_pdf), bbox_inches='tight', dpi=150)
             print(f"Saved plots: {out_png}, {out_pdf}")
     except Exception as e:
         print("Warning: failed to save plot:", e)
@@ -1618,8 +1271,6 @@ except RuntimeError as err:
 
 # Make all trials with all combinations of conditions and repeat and shuffle them
 all_trials = []
-stim_params = read_config(config_dir / 'stimuli.yaml')
-task_params = read_config(config_dir / 'task.yaml')
 
 for speed in task_params["rdk_speeds"]:
     for coherence in task_params["coherence_levels"]:
@@ -1680,7 +1331,8 @@ for trial_index, trial_conditions in enumerate(all_trials, start=1):
     # )
 
     # Plot
-    update_plots(trial_history)
+    if plotter is not None:
+        plotter.update(trial_history)
 
     # Next trial
     trial_index += 1

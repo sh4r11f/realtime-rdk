@@ -1,3 +1,134 @@
-style: "ticks"
-context: "poster"
-font_scale: 0.6
+font_directory: ../tools/fonts
+font_name: Darkmode
+# font_name: DejaVu Sans
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - #
+rcParams:
+  font.family: Darkmode
+  # font.family: DejaVu Sans
+  font.style: normal
+  font.weight: regular
+  font.size: 16
+
+  legend.frameon: true
+  legend.fontsize: 12
+  legend.title_fontsize: 12
+
+  axes.spines.top: false
+  axes.spines.right: false
+  axes.labelsize: 14
+  axes.titlesize: 16
+  axes.linewidth: 1.4
+  axes.edgecolor: black
+  axes.grid: True
+
+  xtick.labelsize: 12
+  xtick.major.size: 6
+  xtick.minor.size: 3
+  xtick.major.width: 1.2
+  xtick.minor.width: 1.0
+
+  ytick.labelsize: 12
+  ytick.major.size: 6
+  ytick.minor.size: 3
+  ytick.major.width: 1.2
+  ytick.minor.width: 1.0
+
+  lines.linewidth: 2.0
+  lines.markersize: 9
+
+  grid.color: "#D3D3D3"
+  grid.linestyle: '--'
+  grid.linewidth: 0.8
+
+  # figure.figsize: [8, 6]
+  # figure.dpi: 300
+
+  # savefig.dpi: 300
+  savefig.format: pdf
+  savefig.bbox: tight
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - #
+Theme:
+  style: ticks
+  context: paper
+  font_scale: 1
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - #
+Colors:
+  blues:
+    dim: "#3636FF"
+    bright: "#5EB9FF"
+    dark: "#050C9C"
+  reds:
+    dim: "#FF142C"
+    bright: "#FFA3AC"
+    dark: "#B80000"
+    mahogany: "#C04000"
+  oranges:
+    bright: "#ffa500"
+    burnt: "#CC5500"
+    cadmium: "#F28C28"
+    dark: "#FFA500"
+    neon: "#FF5F1F"
+    pumpkin: "#FF7518"
+  greens:
+    dartmouth: "#00693E"
+    mint: "#3EB489"
+    bright: "#A3FFA3"
+    dim: "#00B800"
+    dark: "#00B800"
+  teals:
+    bright: "#00F9C7"
+    dim: "#008A6F"
+  purples:
+    bright: "#FF68A2"
+    dim: "#BE39D6"
+    dark: "#be39d6"
+  yellows:
+    bright: "#FFD700"
+    mid: "#FFD700"
+    dim: "#FFD700"
+    dark: "#FFD700"
+  golds:
+    faint: "#FEF4CA"
+    bright: "#FECF14"
+    poppy: "#fcc200"
+  grays:
+    bright: "#D3D3D3"
+    mid: "#878787"
+    dim: "#696969"
+    dark: "#3F3F3F"
+  greys:
+    bright: "#D3D3D3"
+    mid: "#878787"
+    dim: "#696969"
+    dark: "#3F3F3F"
+  pinks:
+    lyft: "#FF00BF"
+    hot: "#FF69B4"
+    victoria: "#F9629F"
+  cyans:
+    stone: "#14303d"
+    pacific: "#00b2bb"
+    bright: "#91ffff"
+    mid: "#00FFFF"
+    dim: "#b2f7ef"
+    dark: "#08a4a7"
+    dark2: "#008B8B"
+  magentas:
+    faint: "#FFACF6"
+    bright: "#ff00ff"
+    dim: "#ff89ff"
+    dark: "#8b008b"
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - #
+Palettes:
+  contrast: [ "#3ABEF9", "#3572EF", "#050C9C" ]
+  tf: [ "#B80000", "#FF0A0A", "#FF4747" ]
+  sf: [ "#FFA500", "#FFD700", "#FFD700" ]
+  saccade:
+    motion: [ "#F28C28", "#FF68A2" ]  # hard, soft
+    location: [ "#00b2bb", "#00B800" ]  # hard, soft
+  informative:
+    location: [ "#3636FF", "#5EB9FF" ]  # action, feature
+    motion: [ "#FF142C", "#ff89ff" ]  # action, feature
+  strategy:
+    action: [ "#3636FF", "#FF142C" ]  # location, motion
+    feature: [ "#5EB9FF", "#ff89ff" ]  # location, motion
