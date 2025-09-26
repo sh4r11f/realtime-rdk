@@ -11,6 +11,7 @@ import pandas as pd
 
 import pylink
 from EyeLinkCoreGraphicsPsychoPy import EyeLinkCoreGraphicsPsychoPy
+from src.ni_sync import TrialSync  # Digital pulses: trial start, stimulus onset, saccade onset
 from psychopy import visual, core, event, monitors, logging, gui
 from psychopy.tools.monitorunittools import deg2pix, pix2deg
 
@@ -19,7 +20,7 @@ from nidaqmx.constants import VoltageUnits
 
 import matplotlib.pyplot as plt
 import seaborn as sns
-
+# from matplotlib import font_manager, rcParams
 
 # Switch to the script folder
 root = Path().cwd()
@@ -37,6 +38,10 @@ log_dir.mkdir(exist_ok=True, parents=True)
 # Ensure local src directory is importable
 if str(src_dir) not in sys.path:
     sys.path.append(str(src_dir))
+
+# Fonts
+# font_manager.fontManager.addfont(Path(r"C:\Windows\Fonts\arial.ttf"))
+# rcParams['font.family'] = 'Arial'
 
 # Clock
 clock = core.Clock()
@@ -68,6 +73,8 @@ dlg = gui.Dlg(dlg_title)
 dlg.addText(dlg_prompt)
 dlg.addField("Subject", "HD")
 dlg.addField('Session', '')
+dlg.addField("Debug mode", False)
+dlg.addField("Simulation mode", False)
 
 # show dialog and wait for OK or Cancel
 ok_data = dlg.show()
@@ -108,7 +115,11 @@ else:
         sys.exit()
 
 # Step 2: Open an EDF data file on the Host PC
-edf_file = "rdk.EDF"
+base_id = f"{sub_id[:3]}{ses_id:02d}".upper()
+# Fallback if empty
+if len(base_id) == 0:
+    base_id = "RDK000"
+edf_file = (base_id[:8]).upper() + ".EDF"
 try:
     el_tracker.openDataFile(edf_file)
 except RuntimeError as err:
@@ -335,7 +346,7 @@ def update_plots(history):
     sns.lineplot(x='trial_index', y='percent_correct', data=df, ax=axs[0, 1])
     axs[0, 1].set_title(
         f"Total correct {df['correct'].sum()} / {df['correct'].count()} trials"
-        f" | Total reward {df['correct'].sum() * 0.25:.2f} ml"
+        f" | Total reward {df['correct'].sum() * 0.4:.2f} ml (0.4 ml/trial)"
     )
     axs[0, 1].set_xlabel("Trial")
     axs[0, 1].set_ylabel("Percent correct")
@@ -527,7 +538,7 @@ def update_plots(history):
             hue='direction_name', data=angle_df, ax=axs[2, 1],
             palette="Set1", s=100
         )
-        # Fit lines for each direction 
+    # Fit lines for each direction
         sns.regplot(
             x='saccade_rt', y='saccade_angle',
             data=angle_df[angle_df['direction'] == 90],
@@ -593,37 +604,37 @@ def update_plots(history):
         axs[2, 2].set_ylabel("MIB (saccade Y, dva)")
 
         # Fit a Weibull function if we have at least 3 unique coherence levels
-        if psycho_df['coherence'].nunique() >= 3:
-            from scipy.optimize import curve_fit
+        # if psycho_df['coherence'].nunique() >= 3:
+        #     from scipy.optimize import curve_fit
 
-            def weibull(x, alpha, beta, gamma, delta):
-                """Weibull function for psychometric fitting."""
-                return gamma + (1 - gamma - delta) * (1 - np.exp(-(x / alpha) ** beta))
+        #     def weibull(x, alpha, beta, gamma, delta):
+        #         """Weibull function for psychometric fitting."""
+        #         return gamma + (1 - gamma - delta) * (1 - np.exp(-(x / alpha) ** beta))
 
-            try:
-                popt, _ = curve_fit(
-                    weibull,
-                    psycho_df['coherence'],
-                    psycho_df['mean_mib'],
-                    bounds=([0, 0, -np.inf, -np.inf], [np.inf, np.inf, np.inf, np.inf]),
-                    maxfev=100
-                )
-                x_fit = np.linspace(psycho_df['coherence'].min(), psycho_df['coherence'].max(), 100)
-                y_fit = weibull(x_fit, *popt)
-                axs[2, 2].plot(x_fit, y_fit, 'r--', label='Weibull fit')
-                axs[2, 2].legend()
-                fit_text = f"Weibull fit:\nα={popt[0]:.2f}, β={popt[1]:.2f}\nγ={popt[2]:.2f}, δ={popt[3]:.2f}"
-                axs[2, 2].text(0.05, 0.95, fit_text, transform=axs[2, 2].transAxes,
-                               verticalalignment='top', fontsize=10,
-                               bbox=dict(boxstyle='round', facecolor='white', alpha=0.5))
-            except Exception as e:
-                print(f"Warning: failed to fit Weibull function: {e}")
-        else:
-            axs[2, 2].text(0.5, 0.5, "Not enough coherence levels to fit", ha='center', va='center')
-            axs[2, 2].set_title("MIB Fit")
-            axs[2, 2].set_xlabel("Coherence")
-            axs[2, 2].set_ylabel("MIB (saccade Y, dva)")
-            axs[2, 2].set_ylim(psycho_df['mean_mib'].min() - 1, psycho_df['mean_mib'].max() + 1)
+        #     try:
+        #         popt, _ = curve_fit(
+        #             weibull,
+        #             psycho_df['coherence'],
+        #             psycho_df['mean_mib'],
+        #             bounds=([0, 0, -np.inf, -np.inf], [np.inf, np.inf, np.inf, np.inf]),
+        #             maxfev=100
+        #         )
+        #         x_fit = np.linspace(psycho_df['coherence'].min(), psycho_df['coherence'].max(), 100)
+        #         y_fit = weibull(x_fit, *popt)
+        #         axs[2, 2].plot(x_fit, y_fit, 'r--', label='Weibull fit')
+        #         axs[2, 2].legend()
+        #         fit_text = f"Weibull fit:\nα={popt[0]:.2f}, β={popt[1]:.2f}\nγ={popt[2]:.2f}, δ={popt[3]:.2f}"
+        #         axs[2, 2].text(0.05, 0.95, fit_text, transform=axs[2, 2].transAxes,
+        #                        verticalalignment='top', fontsize=10,
+        #                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.5))
+        #     except Exception as e:
+        #         print(f"Warning: failed to fit Weibull function: {e}")
+        # else:
+        #     axs[2, 2].text(0.5, 0.5, "Not enough coherence levels to fit", ha='center', va='center')
+        #     axs[2, 2].set_title("MIB Fit")
+        #     axs[2, 2].set_xlabel("Coherence")
+        #     axs[2, 2].set_ylabel("MIB (saccade Y, dva)")
+        #     axs[2, 2].set_ylim(psycho_df['mean_mib'].min() - 1, psycho_df['mean_mib'].max() + 1)
 
     plt.tight_layout()
     # draw and allow GUI event loop to process without blocking
@@ -657,7 +668,7 @@ def show_msg(win, text, wait_for_keypress=True):
         clear_screen(win)
 
 
-def give_reward(reward_voltage=5.0, duration_ms=200, pulses=2, inter_pulse_ms=200):
+def give_reward(reward_voltage=5.0, duration_ms=100, pulses=2, inter_pulse_ms=200):
     """
     Hardware‑timed reward output matching the MATLAB session approach.
     Builds a waveform sampled at 1000 Hz and outputs it using a finite
@@ -972,21 +983,26 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
     # RDK display parameters (position relative to center)
     rdk_params = stim_params["RDK"]
     noise_params = stim_params["Noise"]
-    rdk_ecc = deg2pix(rdk_params["eccentricity"], mon)
-    rdk_pos_jitter = deg2pix(rdk_params["position_jitter"], mon)
-    rdk_side = 1 if rdk_params["side"] == "right" else 0
-    jitter = np.random.uniform(-rdk_pos_jitter, rdk_pos_jitter)
-    if rdk_side == 1:
-        rdk_x = rdk_ecc + jitter
-    else:
-        rdk_x = -rdk_ecc + jitter
-    rdk_y = jitter
+    rdk_x = -deg2pix(rdk_params["position_x"], mon)
+    rdk_y = deg2pix(rdk_params["position_y"], mon)
+    pos_angle = np.atan2(rdk_y, rdk_x)  # radians
+    pos_ecc = np.sqrt(rdk_x**2 + rdk_y**2)  # pixels
+    rdk_ori = np.degrees(pos_angle)  # degrees (0=right, 90=up)
+    # rdk_ecc = deg2pix(rdk_params["eccentricity"], mon)
+    # rdk_pos_jitter = deg2pix(rdk_params["position_jitter"], mon)
+    # rdk_side = 1 if rdk_params["side"] == "right" else 0
+    # jitter = np.random.uniform(-rdk_pos_jitter, rdk_pos_jitter)
+    # if rdk_side == 1:
+    #     rdk_x = rdk_ecc + jitter
+    # else:
+    #     rdk_x = -rdk_ecc + jitter
+    # rdk_y = jitter
     # Import here to avoid circulars at module import time
     from src.rdk import GaussianRDK
 
     # Gaussian sigma defaults to half-radius; allow override via YAML (optional)
-    rdk_sigma = deg2pix(rdk_params.get("gauss_sigma", rdk_params["field_size"]/2.0), mon)
-    noise_sigma = deg2pix(noise_params.get("gauss_sigma", noise_params["field_size"]/2.0), mon)
+    rdk_sigma = deg2pix(rdk_params.get("gauss_sigma", rdk_params["field_size"]/2.5), mon)
+    noise_sigma = deg2pix(noise_params.get("gauss_sigma", noise_params["field_size"]/2.5), mon)
 
     # Convert units to pixels
     dot_size_px = deg2pix(rdk_params["dot_size"], mon)
@@ -994,13 +1010,15 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
     field_size_px = deg2pix(rdk_params["field_size"], mon)
 
     # Main RDK with coherent signal + per-frame random-direction noise
+    # direction = condition["direction"] - rdk_ori if condition["direction"] == 90 else condition["direction"] + (180 - rdk_ori)
+    direction = condition["direction"] + (90 - rdk_ori)
     rdk = GaussianRDK(
         win=win,
         n_dots=rdk_params["n_dots"],
         dot_size=dot_size_px,
         speed=speed_px,
         dot_life=rdk_params["dot_life"],
-        direction=condition["direction"],
+        direction=direction,
         coherence=condition["coherence"],
         field_pos=(rdk_x, rdk_y),
         field_size=field_size_px,
@@ -1135,24 +1153,83 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
     # Define hit region (circle centered on RDK)
     sac_tol_px = deg2pix(rdk_params["field_size"], mon) / 2.0 + deg2pix(task_params["saccade_tolerance"], mon)
     fix_tol_px = deg2pix(task_params["fixation_tolerance"], mon)
-    hit_region = (
-        int(scn_width/2.0 + rdk_x - sac_tol_px),
-        int(scn_height/2.0 - rdk_y - sac_tol_px),
-        int(scn_width/2.0 + rdk_x + sac_tol_px),
-        int(scn_height/2.0 - rdk_y + sac_tol_px)
-    )
+
+    # Circle (hit) region around RDK center
+    rdk_center_x = int(scn_width/2.0 + rdk_x)
+    rdk_center_y = int(scn_height/2.0 - rdk_y)
+    hit_radius = int(sac_tol_px)
+
+    # Bounding box for oval (left, top, right, bottom)
+    hit_left   = rdk_center_x - hit_radius
+    hit_top    = rdk_center_y - hit_radius
+    hit_right  = rdk_center_x + hit_radius
+    hit_bottom = rdk_center_y + hit_radius
+
+    # Draw circular (oval) hit region on Host (fallback to polygon if draw_oval unsupported)
+    try:
+        el_tracker.sendCommand(f"draw_oval {hit_left} {hit_top} {hit_right} {hit_bottom} 15")
+    except Exception:
+        # Approximate circle with line segments
+        import math
+        n_seg = 36
+        pts = []
+        for k in range(n_seg):
+            ang = 2 * math.pi * k / n_seg
+            x = int(rdk_center_x + hit_radius * math.cos(ang))
+            y = int(rdk_center_y + hit_radius * math.sin(ang))
+            pts.append((x, y))
+        for (x1, y1), (x2, y2) in zip(pts, pts[1:] + [pts[0]]):
+            el_tracker.sendCommand(f"draw_line {x1} {y1} {x2} {y2} 15")
+
+    # Data Viewer ellipse Interest Area (ID=1)
+    ia_msg = f"!V IAREA ELLIPSE 1 {hit_left} {hit_top} {hit_right} {hit_bottom} rdk_hit"
+    el_tracker.sendMessage(ia_msg)
+
+    # Fixation region (still a circle) drawn similarly
+    fix_radius = int(fix_tol_px)
+    fix_left   = int(scn_width/2.0 - fix_radius)
+    fix_top    = int(scn_height/2.0 - fix_radius)
+    fix_right  = int(scn_width/2.0 + fix_radius)
+    fix_bottom = int(scn_height/2.0 + fix_radius)
+    try:
+        el_tracker.sendCommand(f"draw_oval {fix_left} {fix_top} {fix_right} {fix_bottom} 15")
+    except Exception:
+        import math
+        n_seg = 24
+        cx_fix = scn_width//2
+        cy_fix = scn_height//2
+        pts2 = []
+        for k in range(n_seg):
+            ang = 2 * math.pi * k / n_seg
+            x = int(cx_fix + fix_radius * math.cos(ang))
+            y = int(cy_fix + fix_radius * math.sin(ang))
+            pts2.append((x, y))
+        for (x1, y1), (x2, y2) in zip(pts2, pts2[1:] + [pts2[0]]):
+            el_tracker.sendCommand(f"draw_line {x1} {y1} {x2} {y2} 15")
+    fix_ia_msg = f"!V IAREA ELLIPSE 2 {fix_left} {fix_top} {fix_right} {fix_bottom} fixation"
+    el_tracker.sendMessage(fix_ia_msg)
+    
+    # sac_tol_px = deg2pix(rdk_params["field_size"], mon) / 2.0 + deg2pix(task_params["saccade_tolerance"], mon)
+    # fix_tol_px = deg2pix(task_params["fixation_tolerance"], mon)
+    # hit_region = (
+    #     int(scn_width/2.0 + rdk_x - sac_tol_px),
+    #     int(scn_height/2.0 - rdk_y - sac_tol_px),
+    #     int(scn_width/2.0 + rdk_x + sac_tol_px),
+    #     int(scn_height/2.0 - rdk_y + sac_tol_px)
+    # )
+    
     # target_ia_msg = '!V IAREA RECTANGLE 1 %d %d %d %d rdk_IA' % hit_region
     # el_tracker.sendMessage(target_ia_msg)
-    el_tracker.sendCommand(f"draw_box {hit_region[0]} {hit_region[1]} {hit_region[2]} {hit_region[3]} 15")
-    fix_region = (
-        int(scn_width/2.0 - fix_tol_px),
-        int(scn_height/2.0 - fix_tol_px),
-        int(scn_width/2.0 + fix_tol_px),
-        int(scn_height/2.0 + fix_tol_px)
-    )
+    # el_tracker.sendCommand(f"draw_box {hit_region[0]} {hit_region[1]} {hit_region[2]} {hit_region[3]} 15")
+    # fix_region = (
+    #     int(scn_width/2.0 - fix_tol_px),
+    #     int(scn_height/2.0 - fix_tol_px),
+    #     int(scn_width/2.0 + fix_tol_px),
+    #     int(scn_height/2.0 + fix_tol_px)
+    # )
     # fix_ia_msg = '!V IAREA RECTANGLE 2 %d %d %d %d fix_IA' % fix_region
     # el_tracker.sendMessage(fix_ia_msg)
-    el_tracker.sendCommand(f"draw_box {fix_region[0]} {fix_region[1]} {fix_region[2]} {fix_region[3]} 15")
+    # el_tracker.sendCommand(f"draw_box {fix_region[0]} {fix_region[1]} {fix_region[2]} {fix_region[3]} 15")
 
     # Simple, non-blinking fixation acquire: check gaze samples for timeout
     fix_timeout = task_params["fixation_timeout"] / 1000.0
@@ -1167,17 +1244,28 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
     # Setup trial data record
     trial_data = {
         "trial_index": trial_index,
+        "trial_start_time": time.time(),
+        "trial_start_tracker_time": el_tracker.trackerTime(),
         "speed": condition["speed"],
         "coherence": condition["coherence"],
         "direction": condition["direction"],
-        "side": rdk_params["side"],
         "saccade_rt": -1,
         "saccade_duration": -1,
         "correct": 0,
         "saccade_x": -1,
         "saccade_y": -1,
+        "saccade_start_x": -1,
+        "saccade_start_y": -1,
         "stim_x": rdk_x,
         "stim_y": rdk_y,
+        "fix_onset": -1,
+        "fix_onset_tracker": -1,
+        "stim_onset": -1,
+        "stim_onset_tracker": -1,
+        "stim_offset": -1,
+        "stim_offset_tracker": -1,
+        "saccade_onset": -1,
+        "saccade_onset_tracker": -1,
     }
 
     # Step 1: Acquire fixation
@@ -1185,7 +1273,7 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
         # in dummy mode, just wait a moment and assume fixation acquired
         time.sleep(0.5)
         fix_acquired = True
-    
+
     start_t = time.time()
     blink_start = time.time()
     hold_start = None
@@ -1219,7 +1307,7 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
                 el_tracker.sendMessage('trial_skipped_by_user')
                 clear_screen(win)
                 abort_trial()
-                return trial_data
+                return None
             # Ctrl-C to terminate experiment (existing behavior)
             if keycode == 'c' and (modifier['ctrl'] is True):
                 el_tracker.sendMessage('terminated_by_user')
@@ -1296,6 +1384,13 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
                     hold_start = time.time()
                 elif (time.time() - hold_start) >= fix_hold_time:
                     fix_acquired = True
+                    trial_data["fix_onset"] = hold_start
+                    try:
+                        trial_data["fix_onset_tracker"] = el_tracker.trackerTime()
+                    except Exception:
+                        trial_data["fix_onset_tracker"] = -1
+                    trial_data["fix_x"] = 0
+                    trial_data["fix_y"] = 0
                     break
             else:
                 hold_start = None
@@ -1336,7 +1431,7 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
                 el_tracker.sendMessage('trial_skipped_by_user')
                 clear_screen(win)
                 abort_trial()
-                return trial_data
+                return None
             # Ctrl-C to terminate experiment (existing behavior)
             if keycode == 'c' and (modifier['ctrl'] is True):
                 el_tracker.sendMessage('terminated_by_user')
@@ -1453,7 +1548,7 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
                 el_tracker.sendMessage('trial_skipped_by_user')
                 clear_screen(win)
                 abort_trial()
-                return trial_data
+                return None
             # Ctrl-C to terminate experiment (existing behavior)
             if keycode == 'c' and (modifier['ctrl'] is True):
                 el_tracker.sendMessage('terminated_by_user')
@@ -1496,6 +1591,14 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
         win.flip()
         if stim_onset is None:
             stim_onset = time.time()
+            trial_data["stim_onset"] = stim_onset
+            el_tracker.sendMessage('stim_onset')
+            try:
+                trial_data["stim_onset_tracker"] = el_tracker.trackerTime()
+            except Exception:
+                trial_data["stim_onset_tracker"] = -1
+            if '_stim_sync' in globals() and _stim_sync is not None:
+                _stim_sync.send()
 
         # Check for saccade events
         if simulation_mode:
@@ -1503,6 +1606,10 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
                 # in simulation mode, just wait 0.5 seconds and assume saccade made
                 got_sac = True
                 trial_data["saccade_rt"] = np.random.normal(250, 50)  # dummy value
+                trial_data["saccade_onset"] = time.time()
+                trial_data["saccade_onset_tracker"] = el_tracker.trackerTime()
+                if '_saccade_sync' in globals() and _saccade_sync is not None:
+                    _saccade_sync.send()
                 break
 
         try:
@@ -1534,7 +1641,17 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
         if (gaze_center_x is not None) and (gaze_center_y is not None):
             if (gaze_center_x * gaze_center_x + gaze_center_y * gaze_center_y) > (fix_tol_px * fix_tol_px):
                 got_sac = True
-                trial_data["saccade_rt"] = (time.time() - stim_onset) * 1000.0  # in ms
+                sacc_on_sys = time.time()
+                trial_data["saccade_rt"] = (sacc_on_sys - stim_onset) * 1000.0  # in ms
+                trial_data["saccade_onset"] = sacc_on_sys
+                try:
+                    trial_data["saccade_onset_tracker"] = el_tracker.trackerTime()
+                except Exception:
+                    trial_data["saccade_onset_tracker"] = -1
+                trial_data["saccade_start_x"] = gaze_center_x if gaze_center_x is not None else -1
+                trial_data["saccade_start_y"] = gaze_center_y if gaze_center_y is not None else -1
+                if '_saccade_sync' in globals() and _saccade_sync is not None:
+                    _saccade_sync.send()
                 break
 
     # Abort if no saccade detected
@@ -1567,7 +1684,7 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
                 el_tracker.sendMessage('trial_skipped_by_user')
                 clear_screen(win)
                 abort_trial()
-                return trial_data
+                return None
             # Ctrl-C to terminate experiment (existing behavior)
             if keycode == 'c' and (modifier['ctrl'] is True):
                 el_tracker.sendMessage('terminated_by_user')
@@ -1618,9 +1735,8 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
                 trial_data["saccade_y"] = rdk_y + np.random.normal(-sac_tol_px/2, sac_tol_px/2)
                 trial_data["correct"] = 1
                 break
-
-        
         try:
+            
             sample = el_tracker.getNewestSample()
         except Exception:
             sample = None
@@ -1649,6 +1765,9 @@ def run_trial(condition, trial_index, stim_params, task_params, history):
             if (gaze_center_x * gaze_center_x + gaze_center_y * gaze_center_y) <= (sac_tol_px * sac_tol_px):
                 landed_in_target = True
                 trial_data["correct"] = 1
+                trial_data["stim_offset"] = time.time()
+                trial_data["stim_offset_tracker"] = el_tracker.trackerTime()
+                el_tracker.sendMessage('stim_offset')
                 trial_data["saccade_duration"] = time.time() - start_t
                 trial_data["saccade_x"] = gx - cx
                 trial_data["saccade_y"] = -gy + cy
@@ -1735,10 +1854,24 @@ intro_text = (
     "Press 'c' to calibrate at any time, or 'escape' to quit."
 )
 show_msg(win, intro_text, wait_for_keypress=False)
-
 if dummy_mode:
     print('ERROR: This task requires real-time gaze data.\nIt cannot run in Dummy mode.')
     terminate_task(trial_history)
+
+# Configure hardware sync pulses (set enable_sync False to disable without removing code)
+enable_sync = True
+#  - trial_start_line   : pulse at logical trial start (before stimulus presentation)
+#  - stim_onset_line    : pulse on first stimulus frame (RDK onset)
+#  - saccade_onset_line : pulse when gaze leaves fixation window (saccade initiation)
+trial_start_line = "Dev1/port0/line0"
+stim_onset_line = "Dev1/port0/line1"
+saccade_onset_line = "Dev1/port0/line2"
+
+sync_pulse_ms = 2.0
+
+_trial_sync = TrialSync(line=trial_start_line, pulse_ms=sync_pulse_ms) if enable_sync else None
+_stim_sync = TrialSync(line=stim_onset_line, pulse_ms=sync_pulse_ms) if enable_sync else None
+_saccade_sync = TrialSync(line=saccade_onset_line, pulse_ms=sync_pulse_ms) if enable_sync else None
 
 # run initial calibration before starting (same behavior as before)
 try:
@@ -1771,6 +1904,9 @@ np.random.shuffle(all_trials)
 n_correct_in_a_row = 0
 # while trial_index <= total_trials:
 for trial_index, trial_conditions in enumerate(all_trials, start=1):
+    # Send trial start sync pulse BEFORE any screen flip / stimulus onset
+    if _trial_sync is not None:
+        _trial_sync.send()
 
     # Run trial
     results = run_trial(trial_conditions, trial_index, stim_params, task_params, trial_history)
@@ -1822,3 +1958,10 @@ for trial_index, trial_conditions in enumerate(all_trials, start=1):
 
 # Step 6: disconnect, download the EDF file, then terminate the task
 terminate_task(trial_history)
+
+# Clean up trial sync hardware task
+if _trial_sync is not None:
+    try:
+        _trial_sync.close()
+    except Exception:
+        pass

@@ -1,14 +1,14 @@
-fixation_tolerance: 3.5  # dva
+fixation_tolerance: 3  # dva
 fixation_timeout: 5000  # ms
 fixation_hold: 200  # ms
 fixation_duration: 500  # ms
 fixation_jitter: 250  # ms
 fixation_blink_period: 300  # ms
-saccade_tolerance: 3  # dva
+saccade_tolerance: 2.5  # dva
 saccade_initiation_duration: 500  # ms
 saccade_duration: 100  # ms
 max_rdk_duration: 800  # ms
-rdk_speeds: [25]  # dva/s
+rdk_speeds: [16]  # dva/s
 coherence_levels: [0, 0.10, 0.20, 0.35, 0.60]  # proportion
 inter_trial_interval: 100  # ms
 reward_amount: 0.25  # ml

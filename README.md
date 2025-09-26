@@ -28,3 +28,4 @@ The same class is used for the noise field with `coherence: 0.0`.
 [x] RTs for different speeds/coherences
 [ ] BLINK detection
 [ ] Equalize stimulus and background luminance
+[ ] Eyelink aspect ratio

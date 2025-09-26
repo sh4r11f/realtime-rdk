@@ -1,15 +1,18 @@
 RDK:
   eccentricity: 15
-  dot_size: 0.5
+  position_x: 7.5
+  position_y: 6
+  dot_size: 0.4
   width: 10
   density: 0.001
   speed: 0.18
   position_jitter: 0  # dva
   duration: 800  # ms
-  n_dots: 40
-  field_size: 10  # dva
+  n_dots: 20
+  field_size: 8  # dva
   dot_life: 80
   side: left
+  # gauss_sigma: 1.5
 # ---------------------------------------
 Fixation:
   size: 0.3
@@ -26,15 +29,18 @@ Calibration:
 # ---------------------------------------
 Noise:
   eccentricity: 15
-  dot_size: 0.5
+  position_x: 7.5
+  position_y: 6
+  dot_size: 0.4
   width: 10
   density: 0.001
   speed: 0.18
   position_jitter: 0  # dva
-  n_dots: 40
-  field_size: 10  # dva
+  n_dots: 20
+  field_size: 8  # dva
   dot_life: 80
   side: left
+  # gauss_sigma: 1.5
 # ---------------------------------------
 Gabor:
   eccentricity: 15  # dva
